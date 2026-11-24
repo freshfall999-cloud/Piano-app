@@ -853,7 +853,8 @@
             }
             // struck piano keys get a sure verdict (0.9 or more); a less sure one needs the signal checks to have seen
             // the strike too (voices tend to score around 0.6)
-            if (KeyfallML.onsetConf[m] < 0.75 && !same) continue;
+            // (or the key still rings: a piano note keeps sounding, a syllable is already gone)
+            if (KeyfallML.onsetConf[m] < 0.75 && !same && KeyfallML.sustain[m] < 0.45) continue;
             mic.acceptedAt[m] = now;
             if (drill) drillAnswer(m); else registerHit(n, micPerfect(n, now - at));
           }
