@@ -18,7 +18,7 @@
   const ui = {
     song: $("song"), mode: $("mode"), hand: $("hand"), speed: $("speed"), speedVal: $("speedVal"),
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
-    streak: $("streak"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
+    streak: $("streak"), mic: $("mic"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
   };
 
   // ---------- Audio ----------
@@ -198,6 +198,100 @@
     ui.results.hidden = false;
   }
 
+  // ---------- Microphone listening ----------
+  // Hears an acoustic/digital piano through the mic. Single notes are found by pitch
+  // detection (YIN); chords are confirmed by looking for each expected note in the spectrum.
+  const mic = { on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, rms: [], lastTrig: 0 };
+  const sameNote = (a, b) => a === b || Math.abs(a - b) === 12;   // forgive octave slips of the detector
+
+  async function toggleMic() {
+    if (mic.on) {
+      mic.stream.getTracks().forEach(t => t.stop());
+      mic.on = false; mic.note = null; ui.mic.textContent = "🎤 Listen: off"; ui.mic.classList.remove("primary");
+      return;
+    }
+    if (!audio() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { ui.mic.textContent = "🎤 Mic unsupported"; return; }
+    try {
+      mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    } catch (e) { ui.mic.textContent = "🎤 Mic blocked"; return; }
+    mic.analyser = ac.createAnalyser();
+    mic.analyser.fftSize = 8192; mic.analyser.smoothingTimeConstant = 0;
+    ac.createMediaStreamSource(mic.stream).connect(mic.analyser);
+    mic.buf = new Float32Array(mic.analyser.fftSize);
+    mic.spec = new Float32Array(mic.analyser.frequencyBinCount);
+    mic.on = true; ui.mic.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
+  }
+
+  function detectPitch(x, sr) {
+    const maxLag = Math.floor(sr / 110), minLag = Math.floor(sr / 2200), W = x.length - maxLag;
+    const d = new Float32Array(maxLag + 1);
+    let run = 0, tau = -1;
+    for (let lag = 1; lag <= maxLag; lag++) {
+      let sum = 0;
+      for (let i = 0; i < W; i++) { const v = x[i] - x[i + lag]; sum += v * v; }
+      run += sum;
+      d[lag] = run ? sum * lag / run : 1;
+    }
+    for (let lag = minLag; lag < maxLag; lag++) if (d[lag] < 0.15) {
+      while (lag + 1 < maxLag && d[lag + 1] < d[lag]) lag++;
+      tau = lag; break;
+    }
+    if (tau < 0) return null;
+    const a = d[tau - 1], b = d[tau], c = d[tau + 1], den = a - 2 * b + c;
+    return sr / (tau + (den ? (a - c) / (2 * den) : 0));
+  }
+
+  function heard(midi) {               // the mic picked up a freshly struck note
+    mic.lastTrig = performance.now();
+    if (state !== "running" || mode() === "listen") return;
+    let n = null;
+    if (mode() === "practice") {
+      const g = nextGroup();
+      if (g.length && g[0].start - time <= 0.35) n = g.find(n => sameNote(n.midi, midi));
+    } else {
+      for (const c of song.notes)
+        if (c.state === "pending" && isUser(c) && sameNote(c.midi, midi) && Math.abs(c.start - time) <= HIT_WINDOW &&
+            (!n || Math.abs(c.start - time) < Math.abs(n.start - time))) n = c;
+    }
+    if (n) registerHit(n, mode() === "practice" || Math.abs(n.start - time) <= PERFECT);
+  }
+
+  function micTick() {
+    if (!mic.on) return;
+    mic.analyser.getFloatTimeDomainData(mic.buf);
+    const x = mic.buf.subarray(mic.buf.length - 2048);
+    let e = 0;
+    for (let i = 0; i < x.length; i++) e += x[i] * x[i];
+    const rms = Math.sqrt(e / x.length);
+    mic.rms.push(rms); if (mic.rms.length > 5) mic.rms.shift();
+    if (rms < 0.008) { mic.note = mic.cand = null; mic.count = 0; return; }
+    const f = detectPitch(x, ac.sampleRate);
+    const midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
+    if (midi !== null && midi >= 40 && midi <= 100) {
+      if (midi === mic.cand) mic.count++; else { mic.cand = midi; mic.count = 1; }
+      if (mic.count >= 2) {
+        const restruck = rms > mic.rms[0] * 1.5 && performance.now() - mic.lastTrig > 120;
+        if (midi !== mic.note || restruck) { mic.note = midi; heard(midi); }
+      }
+    }
+    // chords: check each expected note's fundamental in the spectrum
+    if (state === "running" && mode() === "practice") {
+      const g = nextGroup();
+      if (!g.length || g[0].start - time > 0.05) return;
+      if (song.notes.filter(n => isUser(n) && Math.abs(n.start - g[0].start) < 1e-6).length < 2) return;
+      mic.analyser.getFloatFrequencyData(mic.spec);
+      const hz = ac.sampleRate / mic.analyser.fftSize;
+      let avg = 0, cnt = 0;
+      for (let b = Math.round(100 / hz); b < 2000 / hz; b++) { avg += mic.spec[b]; cnt++; }
+      avg /= cnt;
+      for (const n of g) {
+        const b = Math.round(440 * Math.pow(2, (n.midi - 69) / 12) / hz);
+        const peak = Math.max(mic.spec[b - 1], mic.spec[b], mic.spec[b + 1]);
+        if (peak > -60 && peak > avg + 20) registerHit(n, true);
+      }
+    }
+  }
+
   // ---------- Layout & drawing ----------
   let W = 0, H = 0, kbTop = 0, whiteW = 0, keys = [];
   function layout() {
@@ -261,7 +355,7 @@
     ctx.textAlign = "center";
     for (const pass of [false, true]) for (const k of keys) {
       if (k.black !== pass) continue;
-      const on = down.has(k.midi) || autoDown.has(k.midi);
+      const on = down.has(k.midi) || autoDown.has(k.midi) || mic.note === k.midi;
       ctx.fillStyle = on ? "#39b6ff" : target.has(k.midi) ? (pass ? "#2e7d4f" : "#a8f0c0") : pass ? "#181a22" : "#f4f5f9";
       rrect(k.x + (pass ? 0 : 1), kbTop, k.w - (pass ? 0 : 2), k.h - 2, 4); ctx.fill();
       if (lab === "off") continue;
@@ -296,6 +390,7 @@
 
   let last = performance.now();
   function frame(now) {
+    micTick();
     step(Math.min((now - last) / 1000, 0.1)); last = now;
     draw();
     requestAnimationFrame(frame);
@@ -375,6 +470,7 @@
   ui.mode.onchange = ui.hand.onchange = reset;
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";
   ui.start.onclick = toggle;
+  ui.mic.onclick = toggleMic;
   ui.restart.onclick = () => { reset(); start(); };
   $("again").onclick = () => { reset(); start(); };
   $("close").onclick = reset;
