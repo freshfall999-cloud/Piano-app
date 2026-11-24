@@ -429,7 +429,7 @@
   const mic = {
     on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, level: 0, yinAt: 0, bands: [],
     L: new Float32Array(128).fill(-200), F: new Float32Array(128), live: new Float32Array(128).fill(-200), spread: new Float32Array(128).fill(9),
-    over: new Uint16Array(128), startAt: 0,
+    over: new Uint16Array(128), startAt: 0, FF: new Float32Array(128), J: new Uint8Array(128), lastStruck: new Float64Array(128),
     sal: new Float32Array(130).fill(-200), hist: [],
     armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
     onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
@@ -593,6 +593,24 @@
     }
     const sorted = Array.from(F.subarray(40, 111)).sort((a, b) => a - b), base = Math.max(0, sorted[Math.floor(sorted.length * 0.3)]);
     for (let k = BLO; k <= BHI; k++) F[k] = Math.max(0, F[k] - base);
+    const FF = mic.FF;                                  // the jump within the last 80 ms only
+    // a hammer strike: many bands jump at once, including those between the note's overtones (the attack's
+    // splash). Strings beating only move the note's own overtones, a few at a time.
+    const J = mic.J;                                    // which bands just jumped
+    for (let k = BLO; k <= BHI; k++) {
+      let lo = L[k];
+      for (const h of hist) if (now - h.t <= 80 && h.L[k] < lo) lo = h.L[k];
+      FF[k] = L[k] - lo;
+      J[k] = k >= 40 && k <= 110 && FF[k] >= 3 && L[k] >= noiseAt(k) ? 1 : 0;
+    }
+    // did bands jump that are NOT this key's own overtones (or right beside them)? That's a fresh strike.
+    const struck = m => {
+      let n = 0;
+      const own = new Uint8Array(130);
+      for (const o of HARM) for (let d = -1; d <= 1; d++) if (m + o + d < 130) own[m + o + d] = 1;
+      for (let k = 40; k <= 110; k++) if (J[k] && !own[k]) n++;
+      return n >= 6;
+    };
 
     if (train) trainTick(now);
     else {
@@ -607,6 +625,12 @@
         const s = mic.sal[m], level = s;
         let lo = s;
         for (const h of hist) if (h.s[m] < lo) lo = h.s[m];
+        // A key still ringing from a recent strike swells and fades by itself (its strings beat against each
+        // other), so striking it again only counts together with a fresh hammer strike heard across the spectrum.
+        const ringing = now - mic.hitAt[m] < 3000;
+        if (ringing && struck(m)) mic.lastStruck[m] = now;
+        // (the strike must come after this key's previous counted strike, not be the same one seen again)
+        const restrike = !ringing || (now - mic.lastStruck[m] < 200 && mic.lastStruck[m] - mic.hitAt[m] > 150);
         // ...and at least one of those overtones rose clearly above the background in its own frequency range
         // (a fan or traffic rumble is far louder in the low range than the treble, so one overall level isn't enough)
         let own = 0, ownSoft = 0;
@@ -616,7 +640,7 @@
           if (L[b] >= noiseAt(b) + S.tMargin && F[b] >= S.gRise && peaky(b, 2)) own = 1;
           if (L[b] >= noiseAt(b) + S.tMargin * 0.6 && F[b] >= S.gRise * 0.5) ownSoft = 1;
         }
-        let strict = own && s >= mic.sal[m - 1] + 4 && s >= mic.sal[m + 1] + 4 && s >= floor + S.gFloor && s - lo >= S.gRise;
+        let strict = restrike && own && s >= mic.sal[m - 1] + 4 && s >= mic.sal[m + 1] + 4 && s >= floor + S.gFloor && s - lo >= S.gRise;
         let soft = ownSoft && s >= mic.sal[m - 1] + 2 && s >= mic.sal[m + 1] + 2 && s >= floor + S.gFloor - 6 && s - lo >= S.gRise * 0.5;
         // trained check: the bands where this key was heard during training (either check is enough)
         const t = tmpl[m];
@@ -629,11 +653,11 @@
             if (L[b] >= nz + S.tMargin && L[b] >= lv - S.tSoft && F[b] >= S.tRise && peaky(b, 3)) got += w;
             if (L[b] >= nz + S.tMargin * 0.6 && F[b] >= S.tRise * 0.5 && peaky(b, 1.5)) gotSoft += w;
           }
-          if (tot) { strict = got >= 0.6 * tot; soft = soft || gotSoft >= 0.5 * tot; }
+          if (tot) { strict = restrike && got >= 0.6 * tot; soft = soft || gotSoft >= 0.5 * tot; }
         }
         if (!mic.armed[m]) {                             // a struck key listens again once it fades a little
           if (level > mic.peak[m]) mic.peak[m] = level;
-          if ((now - mic.hitAt[m] > 100 && level < mic.peak[m] - 6) || now - mic.hitAt[m] > 400) mic.armed[m] = 1;
+          if ((now - mic.hitAt[m] > 250 && level < mic.peak[m] - 6) || now - mic.hitAt[m] > 400) mic.armed[m] = 1;
         }
         if (mic.armed[m]) {
           if (strict) {
@@ -669,12 +693,16 @@
             if (L[rb] > mic.pk[m]) mic.pk[m] = L[rb];
             else mic.drop[m] = Math.max(mic.drop[m], mic.pk[m] - L[rb]);
           }
-          const rb2 = mic.ref2[m];
-          if (rb2 > 0) {
-            if (L[rb2] > mic.pk2[m]) mic.pk2[m] = L[rb2];
-            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - L[rb2]);
+          // ...judged on the combined sound of its three freshest overtones: beating strings dip one overtone
+          // at a time, while a syllable of speech fades in all of them at once
+          if (rb > 0) {
+            let pw = 0;
+            for (const b of [rb, mic.ref2[m], mic.ref3[m]]) if (b > 0) pw += Math.pow(10, L[b] / 10);
+            const tot = 10 * Math.log10(pw);
+            if (tot > mic.pk2[m]) mic.pk2[m] = tot;
+            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - tot);
           }
-          if (rb >= 62 && L[rb] >= noiseAt(rb) + 12 && peaky(rb, 3)) {
+          if (rb >= 62 && L[rb] >= noiseAt(rb) + 20 && peaky(rb, 3)) {      // clearly loud only: noise jiggles a soft note's pitch
             const [i0, i1] = mic.bands[rb];
             let i = i0;
             for (let j = i0; j <= i1; j++) if (spec[j] > spec[i]) i = j;
@@ -708,9 +736,9 @@
           const m = n.midi;
           mic.usedAt[m] = from;
           const talkFilter = ui.ignoreTalk.checked && from === mic.onsetAt[m];
-          if (talkFilter && mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 35) return;   // pitch slid: a voice, not a piano
+          if (talkFilter && mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 60) return;   // pitch slid: a voice, not a piano
           // its sound died away at once: speech, not a struck string
-          if (talkFilter && Math.max(mic.drop[m], mic.drop2[m]) > 15) return;
+          if (talkFilter && mic.drop2[m] > 15) return;
           if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] * 3 < mic.seen[m] && !want.has(m + 12))) return;   // wrong octave
           micHit(n, micPerfect(n, now - from)); mic.groupHitAt = now; mic.groupStart = n.start;
         };
