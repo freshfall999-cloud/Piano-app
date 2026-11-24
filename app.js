@@ -295,6 +295,9 @@
     mic.analyser = ac.createAnalyser();
     mic.analyser.fftSize = 8192; mic.analyser.smoothingTimeConstant = 0;
     ac.createMediaStreamSource(mic.stream).connect(mic.analyser);
+    // Safari only processes nodes that lead to the speakers, so route through a silent gain
+    const mute = ac.createGain(); mute.gain.value = 0;
+    mic.analyser.connect(mute).connect(ac.destination);
     mic.buf = new Float32Array(mic.analyser.fftSize);
     mic.spec = new Float32Array(mic.analyser.frequencyBinCount);
     mic.on = true; ui.mic.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
@@ -342,7 +345,8 @@
     for (let i = 0; i < x.length; i++) e += x[i] * x[i];
     const rms = Math.sqrt(e / x.length);
     mic.rms.push(rms); if (mic.rms.length > 5) mic.rms.shift();
-    if (rms < 0.008) { mic.note = mic.cand = null; mic.count = 0; return; }
+    mic.level = rms;
+    if (rms < 0.004) { mic.note = mic.cand = null; mic.count = 0; return; }
     const f = detectPitch(x, ac.sampleRate);
     const midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
     if (midi !== null && midi >= 33 && midi <= 105) {
@@ -455,6 +459,16 @@
       ctx.fillText(f.text, k.x + k.w / 2, kbTop - 14 - a * 30);
     }
     ctx.globalAlpha = 1;
+    // microphone meter: shows that the app is hearing something, and which note
+    if (mic.on) {
+      const lv = Math.min(1, Math.sqrt((mic.level || 0) * 12)), x = W - 176, y = 12;
+      ctx.fillStyle = "rgba(27,30,42,.9)"; rrect(x, y, 164, 34, 8); ctx.fill();
+      ctx.fillStyle = "#2c3042"; ctx.fillRect(x + 10, y + 22, 144, 5);
+      ctx.fillStyle = lv > 0.12 ? "#5fd38a" : "#56607f"; ctx.fillRect(x + 10, y + 22, 144 * lv, 5);
+      ctx.font = "12px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.fillStyle = "#e8eaf2";
+      ctx.fillText(mic.note != null ? "Hearing: " + NAMES[mic.note % 12] + (Math.floor(mic.note / 12) - 1) : "Listening…", x + 10, y + 15);
+      ctx.textAlign = "center";
+    }
     // countdown / progress
     if (song && state !== "idle") {
       if (time < 0 && state === "running") {
