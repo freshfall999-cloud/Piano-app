@@ -301,7 +301,11 @@
     for (const n of song.notes) {
       if (n.start > time) break;
       if (!isUser(n)) {
-        if (!n.played) { n.played = true; n.state = "hit"; noteOn(n.midi, 0.6); autoDown.set(n.midi, n.start + n.dur * 0.92); }
+        if (!n.played) {
+          n.played = true; n.state = "hit";
+          if (!mic.on) noteOn(n.midi, 0.6);                // silent while listening: the microphone would hear it
+          autoDown.set(n.midi, n.start + n.dur * 0.92);
+        }
       } else if (mode() === "play" && n.state === "pending" && time > n.start + (mic.on ? LATE : HIT_WINDOW)) {
         n.state = "miss"; misses++; streak = 0; updateHud();
       }
@@ -434,6 +438,7 @@
     on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, level: 0, yinAt: 0, bands: [],
     L: new Float32Array(128).fill(-200), F: new Float32Array(128), live: new Float32Array(128).fill(-200), spread: new Float32Array(128).fill(9),
     over: new Uint16Array(128), startAt: 0, FF: new Float32Array(128), J: new Uint8Array(128), lastStruck: new Float64Array(128),
+    byRecent: new Uint8Array(130), acceptedAt: new Float64Array(128), sub: new Uint8Array(128), fund: new Uint8Array(128),
     sal: new Float32Array(130).fill(-200), hist: [],
     armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
     onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
@@ -533,6 +538,7 @@
   }
 
   function micHit(n, perfect) {
+    mic.acceptedAt[n.midi] = performance.now();
     if (drill) drillAnswer(n.midi); else registerHit(n, perfect);
   }
   function micTargets() {              // notes the song is currently waiting to hear
@@ -633,6 +639,18 @@
       for (let b = Math.round(200 / hz); b < 4000 / hz && b < nb; b += 4) sample.push(spec[b]);
       sample.sort((a, b) => a - b);
       const floor = Math.max(sample[Math.floor(sample.length * 0.3)], -160);
+      // bands that belong to notes just accepted (or that the app itself is sounding): evidence there can't prove a
+      // different key. Only accepted notes count, never a key the listener merely suspected.
+      const byRecent = mic.byRecent; byRecent.fill(0);
+      const waiting = new Set(micTargets().map(n => n.midi));
+      const explains = k => now - mic.acceptedAt[k] < 600 || autoDown.has(k) || (waiting.has(k) && now - mic.onsetAt[k] < 300);
+      for (let k = 21; k <= 108; k++) if (explains(k)) for (const o of HARM) if (k + o <= BHI) byRecent[k + o]++;
+      const otherKey = (b, m) => byRecent[b] - (explains(m) && HARM.includes(b - m) ? 1 : 0) > 0;
+      // did this key's own fundamental or 3rd overtone just start sounding, in a band no other key being played
+      // explains? (A note still ringing from earlier doesn't count: its tone isn't fresh.)
+      // (A repeated key is the exception: its tone rings on from its own previous strike.)
+      const ownTone = m => [m, m + 19].some(b => b <= BHI && !otherKey(b, m) && (F[b] >= 3 || now - mic.acceptedAt[m] < 3000)
+        && L[b] >= noiseAt(b) + S.tMargin * 0.6 && peaky(b, 2));
       // --- decide, for every key, whether it was just struck
       for (let m = 21; m <= 108; m++) {
         // untrained check: three overtones from 250 Hz up stand out and just jumped
@@ -676,7 +694,7 @@
         if (mic.armed[m]) {
           if (strict) {
             mic.onsetAt[m] = now; mic.armed[m] = 0; mic.peak[m] = level; mic.hitAt[m] = now;
-            mic.lowEv[m] = mic.upTone[m] = mic.own[m] = mic.seen[m] = 0;
+            mic.lowEv[m] = mic.upTone[m] = mic.own[m] = mic.seen[m] = mic.sub[m] = mic.fund[m] = 0;
             // watch the two overtones (above 300 Hz, where pitch resolution is fine) that jumped most at this strike,
             // so the bands hold this note's sound rather than an earlier note's
             let best = -1, second = -1, third = -1;
@@ -736,13 +754,19 @@
           if (clear(lo) && clear(m + 7) && tone(lo) && tone(m + 7) && L[lo] >= ref - 15 && L[m + 7] >= ref - 25 && mic.lowEv[m] < 9) mic.lowEv[m]++;
           // octave above: the key above sounded, but this key's own fundamental and 3rd overtone never did
           if (m >= 36 && tone(m + 12) && visible(m) && visible(m + 19)) mic.upTone[m] = 1;
-          if ((there(m) || there(m + 19)) && mic.own[m] < 255) mic.own[m]++;   // counted per frame, so a flicker doesn't count
+          // From A2 up a struck key's own lowest tone is clearly audible. If it stays silent, what was heard were
+          // overtones of other keys (G4 is C3's 3rd overtone). After training, only where it was heard in training.
+          const t = tmpl[m], fundHeard = !calib || !calib.keys[m] || calib.keys[m].lv[0] - calib.noise[m] >= 12;
+          if (m >= 45 && fundHeard && t !== null && noiseAt(m) + 15 < ref) { if (mic.sub[m] < 255) mic.sub[m]++; if (there(m) && mic.fund[m] < 255) mic.fund[m]++; }
+          // its own fundamental or 3rd overtone: sounding, and either not explained by another note being played
+          // or freshly jumping now (a struck G4 over a ringing C3, whose 3rd overtone is that same G4)
+          if ([m, m + 19].some(b => there(b) && (b > BHI || !otherKey(b, m) || F[b] >= 3)) && mic.own[m] < 255) mic.own[m]++;
         }
       }
       // --- match what was heard to the notes the song is waiting for
       const targets = micTargets();
       if (targets.length) {
-        const keep = drill || mode() === "practice" ? 1200 : 250;
+        const keep = drill || mode() === "practice" ? 800 : 250;
         // every note of the chord being played, including ones already heard, so C3 + C4 isn't mistaken for a lone C3
         const t0 = Math.min(...targets.map(n => n.start)), t1 = Math.max(...targets.map(n => n.start));
         const want = new Set(drill ? [drill.target.midi] : song.notes.filter(n => isUser(n) && n.start >= t0 - 1e-6 && n.start <= t1 + 1e-6).map(n => n.midi));
@@ -753,7 +777,8 @@
           if (talkFilter && mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 60) return;   // pitch slid: a voice, not a piano
           // its sound died away at once: speech, not a struck string
           if (talkFilter && mic.drop2[m] > 15) return;
-          if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] * 3 < mic.seen[m] && !want.has(m + 12))) return;   // wrong octave
+          if (from === mic.onsetAt[m] && mic.sub[m] >= 3 && mic.fund[m] * 3 < mic.sub[m]) return;   // its own lowest tone never sounded
+          if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] * 3 < mic.seen[m])) return;   // wrong octave
           micHit(n, micPerfect(n, now - from)); mic.groupHitAt = now; mic.groupStart = n.start;
         };
         for (const n of targets) {
@@ -765,8 +790,8 @@
         // the rest of a chord that was just heard: weaker evidence is enough for its other notes
         if (!drill && now - mic.groupHitAt <= keep) for (const n of micTargets()) {
           const m = n.midi;
-          if (n.state !== "hit" && n.start === mic.groupStart && mic.softAt[m] > mic.usedAt[m] && now - mic.softAt[m] <= keep) {
-            mic.lowEv[m] = mic.upTone[m] = 0;
+          if (n.state !== "hit" && n.start === mic.groupStart && mic.softAt[m] > mic.usedAt[m] && now - mic.softAt[m] <= keep && ownTone(m)) {
+            mic.lowEv[m] = 0;
             take(n, mic.softAt[m]);
           }
         }
@@ -1266,6 +1291,7 @@
     const frames = [], onsets = [], contours = [];
     await bp.evaluateModel(mono.getChannelData(0), (f, o, c) => { frames.push(...f); onsets.push(...o); contours.push(...c); },
       pct => progress(`Finding the notes… ${Math.round(pct * 100)}%`));
+    window.__bpRaw = { frames, onsets };                 // kept for automated accuracy tests
     const found = noteFramesToTime(addPitchBendsToNoteEvents(contours, outputToNotesPoly(frames, onsets, 0.5, 0.3, 5)));
     // keep real piano notes; quieter echoes of a note, very short blips and overlapping duplicates go
     const loud = Math.max(...found.map(n => n.amplitude), 0);
