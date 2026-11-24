@@ -298,6 +298,7 @@
     Object.assign(d, { step, acc, lastClef: d.clef, tries: 0, done: false, wrongKey: null,
       name: "CDEFGAB"[letter] + (acc > 0 ? "♯" : acc < 0 ? "♭" : "") + oct,
       target: { midi: 12 * (oct + 1) + SEMI[letter] + acc, start: 0, state: "pending" } });
+    mic.usedAt[d.target.midi] = performance.now();      // a note heard before the question appeared doesn't answer it
   }
   function startDrill() {
     reset();
@@ -374,7 +375,7 @@
   const LATE = 0.35;                                                  // hearing lags the key press a little
   const mic = {
     on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, level: 0, yinAt: 0, bands: [],
-    L: new Float32Array(128).fill(-200), F: new Float32Array(128), live: new Float32Array(128).fill(-200),
+    L: new Float32Array(128).fill(-200), F: new Float32Array(128), live: new Float32Array(128).fill(-200), spread: new Float32Array(128).fill(9),
     sal: new Float32Array(130).fill(-200), hist: [],
     armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
     onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
@@ -404,7 +405,10 @@
   buildTemplates();
   const saveCalib = () => { try { localStorage.setItem("keyfall:calib", JSON.stringify(calib)); } catch (e) {} };
   const sens = () => SENS[ui.sens.value] || SENS.normal;
-  const noiseAt = b => calib ? Math.max(calib.noise[b], mic.live[b] + 4) : mic.live[b] + 4;
+  const noiseAt = b => {                               // a level the room's noise rarely exceeds in this band
+    const live = mic.live[b] + 2 * Math.sqrt(mic.spread[b]);
+    return calib ? Math.max(calib.noise[b], live) : live;
+  };
   const lvl = b => b >= BLO && b <= BHI ? mic.L[b] : -200;
   // a band holds a real tone (not the splash of a key's attack): it stands out from the bands around it.
   // Low bands are narrower than the analysis can resolve, so compare them with bands further away.
@@ -439,7 +443,7 @@
       if (i1 < i0) i0 = i1 = Math.round(f / hz);
       mic.bands[k] = [i0, Math.min(i1, nb - 1)];
     }
-    mic.hist = []; mic.live.fill(-200);
+    mic.hist = []; mic.live.fill(-200); mic.spread.fill(9);
     mic.on = true; ui.mic.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
   }
 
@@ -491,7 +495,11 @@
       let pk = -200;
       for (let i = i0; i <= i1; i++) if (spec[i] > pk) pk = spec[i];
       L[k] = pk;
-      live[k] = live[k] <= -199 ? pk : live[k] + (pk - live[k]) * (pk < live[k] ? 0.05 : 0.003);
+      // background level per band: a running mean and spread that ignore anything far above it (the notes)
+      const d = pk - live[k], sp = mic.spread;
+      if (live[k] <= -199) { live[k] = pk; sp[k] = 9; }
+      else if (d < 3 * Math.sqrt(sp[k]) + 3) { live[k] += 0.01 * d; sp[k] += 0.01 * (d * d - sp[k]); }
+      else live[k] += 0.0005 * d;
     }
     // --- untrained salience: three overtones from 250 Hz up
     for (let m = 21; m <= 108; m++) {
@@ -562,7 +570,8 @@
           const there = b => b > BHI || (L[b] >= noiseAt(b) + S.tMargin * 0.6 && peaky(b, 2));
           const visible = b => b > BHI || noiseAt(b) + 15 < L[m + 12];
           // octave below: its fundamental and 3rd overtone (which this key lacks) sounded as well
-          if (tone(lo) && tone(m + 7) && L[lo] >= ref - 15 && L[m + 7] >= ref - 25 && mic.lowEv[m] < 9) mic.lowEv[m]++;
+          const clear = b => b >= BLO && b <= BHI && noiseAt(b) + 15 < ref;
+          if (clear(lo) && clear(m + 7) && tone(lo) && tone(m + 7) && L[lo] >= ref - 15 && L[m + 7] >= ref - 25 && mic.lowEv[m] < 9) mic.lowEv[m]++;
           // octave above: the key above sounded, but this key's own fundamental and 3rd overtone never did
           if (m >= 36 && tone(m + 12) && visible(m) && visible(m + 19)) mic.upTone[m] = 1;
           if ((there(m) || there(m + 19)) && mic.own[m] < 9) mic.own[m]++;   // seen over several frames, not a flicker
