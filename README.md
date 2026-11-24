@@ -6,6 +6,8 @@ A piano practice app that runs in the browser with no build step: open `index.ht
 - **Play** – the song runs in time; hits are scored (Perfect / Good), with streaks, accuracy and stars.
 - **Listen** – the app plays the song for you.
 - Right hand, left hand or both (the other hand is played for you), adjustable speed.
+- **View: falling notes or sheet music** – sheet music shows a grand staff (treble + bass) that scrolls past a play line; in Practice it stops at each note and waits for you, exactly like the falling notes. Note names can be shown inside the note heads.
+- **Difficulty: Easy / Medium / Hard / Extra hard** for every song, including uploaded recordings – Easy is the melody alone, Medium the melody plus one bass note, Hard every note as written (or as transcribed), Extra hard a fuller version with the melody and bass in octaves (one-hand songs get a bass line added).
 - **Listen (microphone)** – turn on 🎤 Listen and play a real piano; the app hears each note and waits for the right one.
 - **Train on my piano** – play each of the 88 keys once; the app learns how every key sounds through this microphone in this room (and the room's background noise), and listens for each key on the bands where it was actually heard. Training is saved in the browser on that device; untrained keys still use the general listener.
 - **AI listening** (on by default) – a trained neural network (Spotify's Basic Pitch) runs on the microphone about four times a second in a background worker and decides which keys were struck; notes register about half a second after they're played. The rule-based listener takes over while it loads or if the device can't run it. (`listen-ml.js`, `ml-worker.js`; the WebAssembly back-end of TensorFlow.js in `vendor/`.)
@@ -15,7 +17,7 @@ A piano practice app that runs in the browser with no build step: open `index.ht
 - **Note practice** – a note appears on the staff (treble, bass or both, optional ledger lines and sharps/flats) and you find it on the keyboard.
 - Input: computer keyboard (Z row = C3 octave, Q row = C4 upward), mouse/touch, or a MIDI keyboard.
 
-The song library screen lists the built-in songs by difficulty and shows your best star rating. **Add your own song** imports a `.mid` file, or a recording (MP3, M4A or WAV) of piano playing: recordings are turned into notes on the device with Spotify's [Basic Pitch](https://github.com/spotify/basic-pitch-ts) model, loaded only the first time it's needed. Choose whether a recording becomes every note, a simplified version (melody + bass) or the melody only. Hands are split at the widest gap in each chord, following the music rather than a fixed middle C. Imported songs are kept in the browser on that device.
+The song library screen lists the built-in songs by difficulty and shows your best star rating. **Add your own song** imports a `.mid` file, or a recording (MP3, M4A or WAV) of piano playing: recordings are turned into notes on the device with Spotify's [Basic Pitch](https://github.com/spotify/basic-pitch-ts) model, loaded only the first time it's needed. Every recording can then be played at any of the four difficulties. Hands are split at the widest gap in each chord, following the music rather than a fixed middle C. Imported songs are kept in the browser on that device.
 
 Third-party files: piano samples in `samples/` (Salamander Grand Piano, CC BY 3.0, see `samples/CREDITS.md`); `vendor/basic-pitch/` (Basic Pitch model and code, Apache 2.0) and `vendor/tf.min.js` (TensorFlow.js 3.21, Apache 2.0).
 

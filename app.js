@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), importAs: $("importAs"), ai: $("ai"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), level: $("level"), view: $("view"), ai: $("ai"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -90,9 +90,10 @@
     if (m[2] === "#") n++; else if (m[2] === "b") n--;
     return n + 12 * (+m[3] + 1);
   }
-  function parseTrack(str, hand, beat, out) {
+  function parseTrack(str, hand, beat, out, bars) {
     let t = 0, lastTok = [];
     for (const tok of (str || "").split(/\s+/)) {
+      if (tok === "|" && bars) bars.push(t);
       if (!tok || tok === "|") continue;
       const [names, d] = tok.split(":");
       const dur = (d ? parseFloat(d) : 1) * beat;
@@ -108,18 +109,77 @@
     }
     return t;
   }
-  function loadSong(def) {
-    const notes = [], beat = 60 / def.bpm;
-    let end;
-    if (def.notes) {                     // imported song: [midi, start, duration, isLeft]
-      for (const [midi, start, dur, left] of def.notes)
-        notes.push({ midi, start, dur, hand: left ? "left" : "right", state: "pending", played: false });
+  function loadSong(def, level = "hard") {
+    let notes = [], beat = 60 / def.bpm, bars = [], end;
+    if (def.notes) {                     // imported song: [midi, start, duration, isLeft, loudness]
+      for (const [midi, start, dur, left, amp] of def.notes)
+        notes.push({ midi, start, dur, amp, hand: left ? "left" : "right", state: "pending", played: false });
       end = Math.max(...notes.map(n => n.start + n.dur));
-    } else end = Math.max(parseTrack(def.right, "right", beat, notes), parseTrack(def.left, "left", beat, notes));
+      beat = guessBeat(notes);
+      for (let t = 0; t < end; t += beat * 4) bars.push(t);
+    } else {
+      const lb = [];
+      end = Math.max(parseTrack(def.right, "right", beat, notes, bars), parseTrack(def.left, "left", beat, notes, lb));
+      if (!bars.length) bars = lb;
+    }
+    notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
+    notes = arrange(notes, level, beat);
     notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
     // if both hands strike the same key at the same moment, keep one note
     const uniq = notes.filter((n, i) => !(i && notes[i - 1].midi === n.midi && Math.abs(notes[i - 1].start - n.start) < 1e-6));
-    return { def, notes: uniq, end };
+    return { def, notes: uniq, end, beat, bars: bars.filter(b => b > 0.01 && b < end - 0.01) };
+  }
+  // a recording has no written tempo: take the typical time between notes as the beat (between 0.35 and 0.9 s)
+  function guessBeat(notes) {
+    const on = [];
+    for (const n of notes) if (!on.length || n.start - on[on.length - 1] > 0.08) on.push(n.start);
+    const gaps = on.slice(1).map((t, i) => t - on[i]).sort((a, b) => a - b);
+    let b = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0.5;
+    while (b < 0.35) b *= 2;
+    while (b > 0.9) b /= 2;
+    return b;
+  }
+  // ---------- Difficulty: every song comes in four versions ----------
+  //  easy: the melody alone · medium: melody + one bass note · hard: as written (or as transcribed)
+  //  extra: fuller — melody in octaves, bass in octaves (or a bass line added to one-hand songs)
+  function arrange(notes, level, beat) {
+    if (level === "hard" || !notes.length) return notes;
+    const groups = [];
+    for (const n of notes) { const g = groups[groups.length - 1]; if (g && n.start - g[0].start < 0.05) g.push(n); else groups.push([n]); }
+    const top = l => l.reduce((a, b) => b.midi > a.midi ? b : a), low = l => l.reduce((a, b) => b.midi < a.midi ? b : a);
+    const out = [];
+    if (level === "extra") {
+      const oneHand = !notes.some(n => n.hand === "left");
+      const have = new Set(notes.map(n => n.midi + "@" + n.start));
+      const add = (n, midi, hand, dur = n.dur) => {
+        if (midi < 21 || have.has(midi + "@" + n.start)) return;
+        have.add(midi + "@" + n.start); out.push({ ...n, midi, hand, dur, state: "pending", played: false });
+      };
+      let lastBass = -1e9;
+      for (const g of groups) {
+        out.push(...g);
+        const r = g.filter(n => n.hand === "right"), l = g.filter(n => n.hand === "left");
+        if (r.length && r.length < 3) { const t = top(r); add(t, t.midi >= 67 ? t.midi - 12 : t.midi + 12, "right"); }   // melody in octaves
+        if (l.length) { const b = low(l); add(b, b.midi - 12, "left"); }
+        else if (oneHand && r.length && g[0].start - lastBass >= beat * 2 - 0.02) {
+          let m = top(r).midi - 24;
+          while (m < 36) m += 12;
+          while (m > 52) m -= 12;
+          add(top(r), m, "left", beat * 1.9); lastBass = g[0].start;
+        }
+      }
+      return out;
+    }
+    let last = -1e9;
+    for (const g of groups) {
+      const loud = Math.max(...g.map(n => n.amp ?? 1));
+      const keep = g.length === 1 ? g : g.filter(n => (n.amp ?? 1) >= loud * 0.35 && n.dur >= 0.08);
+      const r = keep.filter(n => n.hand === "right"), l = keep.filter(n => n.hand === "left");
+      // easy: no ornaments either (a note within 0.12 s of the previous melody note)
+      if (r.length && (level === "medium" || g[0].start - last >= 0.12)) { out.push({ ...top(r) }); last = g[0].start; }
+      if (level === "medium" && l.length) out.push({ ...low(l) });
+    }
+    return out;
   }
 
   // ---------- MIDI file import ----------
@@ -188,10 +248,16 @@
   const down = new Set(), autoDown = new Map(), flashes = [];
 
   const mode = () => ui.mode.value;
+  let wantHand = "both";
   const isUser = n => mode() !== "listen" && (ui.hand.value === "both" || n.hand === ui.hand.value);
 
   function reset() {
-    song = loadSong(SONGS[ui.song.value]);
+    song = loadSong(SONGS[ui.song.value], ui.level.value);
+    sheet = null;
+    const hasL = song.notes.some(n => n.hand === "left"), hasR = song.notes.some(n => n.hand === "right");
+    for (const o of ui.hand.options) o.disabled = (o.value !== "right" && !hasL) || (o.value !== "left" && !hasR);
+    const want = ui.hand.querySelector(`[value="${wantHand}"]`);
+    ui.hand.value = !want.disabled ? wantHand : hasL && hasR ? "both" : hasL ? "left" : "right";
     // fit the on-screen keyboard to the song (never smaller than C3..C6)
     const lo = Math.min(...song.notes.map(n => n.midi)), hi = Math.max(...song.notes.map(n => n.midi));
     LOW = Math.min(48, Math.floor(lo / 12) * 12); HIGH = Math.max(84, Math.ceil(hi / 12) * 12);
@@ -777,6 +843,17 @@
           const m = n.midi, at = KeyfallML.onsetAt[m];
           if (at > mic.usedAt[m] && now - at <= keepAI) {
             mic.usedAt[m] = at;
+            // the signal checks still help when they measured the same strike: a voice slides in pitch and dies at
+            // once; a key whose own lowest tone never sounded was really another key's overtones
+            if (window.__aiLog) window.__aiLog.push({ m, conf: +KeyfallML.onsetConf[m].toFixed(2), dt: Math.round(mic.onsetAt[m] - at), pN: mic.pN[m], range: Math.round(mic.pMax[m] - mic.pMin[m]), drop2: +mic.drop2[m].toFixed(1), sub: mic.sub[m], fund: mic.fund[m], sus: +KeyfallML.sustain[m].toFixed(2) });
+            const same = Math.abs(mic.onsetAt[m] - at) < 250;
+            if (same) {
+              if (ui.ignoreTalk.checked && ((mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 60) || mic.drop2[m] > 15)) continue;
+              if (mic.sub[m] >= 3 && mic.fund[m] * 3 < mic.sub[m]) continue;
+            }
+            // struck piano keys get a sure verdict (0.9 or more); a less sure one needs the signal checks to have seen
+            // the strike too (voices tend to score around 0.6)
+            if (KeyfallML.onsetConf[m] < 0.75 && !same) continue;
             mic.acceptedAt[m] = now;
             if (drill) drillAnswer(m); else registerHit(n, micPerfect(n, now - at));
           }
@@ -990,13 +1067,178 @@
     return gr;
   }
 
+  // ---------- Sheet music view: a grand staff that scrolls past a play line (and waits in practice mode) ----------
+  const SHARP_STEP = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6], FLAT_STEP = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
+  const LETTERS = "CDEFGAB";
+  let sheet = null;                                     // rebuilt when the song, difficulty or screen size changes
+  function buildSheet() {
+    const notes = song.notes, beat = song.beat || 0.5;
+    // flats or sharps: whichever this song's black keys suggest (B♭ and E♭ → flats)
+    const pcs = new Array(12).fill(0); notes.forEach(n => pcs[n.midi % 12]++);
+    const flats = pcs[10] > pcs[6] + pcs[8] + pcs[1];
+    const groups = [];
+    for (const n of notes) {
+      const stepTab = flats ? FLAT_STEP : SHARP_STEP;
+      const step = (Math.floor(n.midi / 12) - 1) * 7 + stepTab[n.midi % 12];
+      const acc = isBlack(n.midi) ? (flats ? -1 : 1) : 0;
+      const staff = n.hand === "left" ? (n.midi > 64 ? "t" : "b") : (n.midi < 55 ? "b" : "t");
+      let g = groups.find(g => g.staff === staff && Math.abs(g.start - n.start) < 0.05 && g.start > n.start - 1);
+      if (!g) { g = { start: n.start, staff, items: [], dur: 0 }; groups.push(g); }
+      g.items.push({ n, step, acc, name: LETTERS[step % 7] });
+      g.dur = Math.max(g.dur, n.dur);
+    }
+    // a recording's held lengths are blurry (pedal, ringing strings): write each note as lasting until the next one
+    if (song.def.notes) for (const st of ["t", "b"]) {
+      const gs = groups.filter(g => g.staff === st);
+      gs.forEach((g, i) => { if (gs[i + 1]) g.dur = Math.min(beat * 4, gs[i + 1].start - g.start); });
+    }
+    for (const g of groups) {
+      const b = g.dur / beat;
+      Object.assign(g, b >= 3.5 ? { open: true, stem: false, flags: 0, dot: false } : b >= 2.6 ? { open: true, stem: true, flags: 0, dot: true }
+        : b >= 1.75 ? { open: true, stem: true, flags: 0, dot: false } : b >= 1.3 ? { open: false, stem: true, flags: 0, dot: true }
+        : b >= 0.85 ? { open: false, stem: true, flags: 0, dot: false } : b >= 0.65 ? { open: false, stem: true, flags: 1, dot: true }
+        : b >= 0.4 ? { open: false, stem: true, flags: 1, dot: false } : { open: false, stem: true, flags: 2, dot: false });
+      g.items.sort((a, b) => a.step - b.step);
+      const mid = g.staff === "t" ? 34 : 22, avg = g.items.reduce((a, i) => a + i.step, 0) / g.items.length;
+      g.up = avg < mid;
+      // neighbouring notes of a chord sit on opposite sides of the stem
+      for (let i = 1; i < g.items.length; i++) g.items[i].side = g.items[i].step - g.items[i - 1].step === 1 && !g.items[i - 1].side ? 1 : 0;
+    }
+    // spacing: the quickest common notes still get room for a note head and its sharp
+    const on = [...new Set(notes.map(n => Math.round(n.start * 20) / 20))].sort((a, b) => a - b);
+    const gaps = on.slice(1).map((t, i) => (t - on[i]) / beat).filter(x => x > 0.05).sort((a, b) => a - b);
+    const quick = gaps.length ? gaps[Math.floor(gaps.length * 0.1)] : 1;
+    let top = 62, bottom = kbTop - 14;
+    const sp = Math.max(6, Math.min(22, (bottom - top) / 21, W / 38));
+    const spare = (bottom - top) - 24 * sp;                         // a tall screen: a paper just big enough, centred
+    if (spare > 0) { top += spare / 2; bottom -= spare / 2; }
+    const h = bottom - top;
+    const trebleTop = top + (h - 14 * sp) / 2, trebleBottom = trebleTop + 4 * sp, bassTop = trebleBottom + 6 * sp, bassBottom = bassTop + 4 * sp;
+    const left = 10, clefW = sp * 5.2;
+    const pxBeat = Math.max(sp * 4.5, Math.min(sp * 16, sp * 3.8 / Math.max(quick, 0.1)));
+    sheet = { groups, flats, sp, top, bottom, left, right: W - 10, clefW, trebleTop, trebleBottom, bassTop, bassBottom,
+      playX: left + Math.max(clefW + sp * 5, W * 0.24), pps: pxBeat / beat, W, kbTop };
+  }
+  function drawSheet() {
+    if (!sheet || sheet.W !== W || sheet.kbTop !== kbTop) buildSheet();
+    const S = sheet, sp = S.sp, now = performance.now();
+    const xOf = t => S.playX + (t - time) * S.pps;
+    const yOf = (staff, step) => staff === "t" ? S.trebleBottom - (step - 30) * sp / 2 : S.bassBottom - (step - 18) * sp / 2;
+    // paper
+    const pg = ctx.createLinearGradient(0, S.top, 0, S.bottom);
+    pg.addColorStop(0, "#fbf8f1"); pg.addColorStop(1, "#ece6d8");
+    ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 4;
+    ctx.fillStyle = pg; rrect(S.left, S.top, S.right - S.left, S.bottom - S.top, 14); ctx.fill();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.save(); rrect(S.left, S.top, S.right - S.left, S.bottom - S.top, 14); ctx.clip();
+    const INK = "#262a36";
+    // staff lines
+    ctx.strokeStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = 1;
+    for (const b of [S.trebleBottom, S.bassBottom]) for (let i = 0; i < 5; i++) {
+      const y = Math.round(b - i * sp) + 0.5; ctx.beginPath(); ctx.moveTo(S.left + 8, y); ctx.lineTo(S.right - 8, y); ctx.stroke();
+    }
+    // the play line, with a soft band where the notes to play sit
+    const band = ctx.createLinearGradient(S.playX - sp * 2, 0, S.playX + sp * 2, 0);
+    band.addColorStop(0, "rgba(57,182,255,0)"); band.addColorStop(0.5, "rgba(57,182,255,.16)"); band.addColorStop(1, "rgba(57,182,255,0)");
+    ctx.fillStyle = band; ctx.fillRect(S.playX - sp * 2, S.trebleTop - sp * 3, sp * 4, S.bassBottom - S.trebleTop + sp * 6);
+    // bar lines
+    ctx.fillStyle = "rgba(38,42,54,.8)";
+    for (const b of song.bars) {
+      const x = xOf(b) - sp * 1.7;
+      if (x < S.left + S.clefW || x > S.right) continue;
+      ctx.fillRect(Math.round(x), S.trebleTop, 1.4, S.bassBottom - S.trebleTop);
+    }
+    // notes
+    const target = new Set(mode() === "practice" && state !== "idle" ? nextGroup().filter(n => n.start - time < 0.02) : []);
+    const labels = ui.labels.value === "notes";
+    const rx = sp * (labels ? 0.78 : 0.62), ry = sp * (labels ? 0.56 : 0.44);
+    for (const g of S.groups) {
+      const x = xOf(g.start);
+      if (x > S.right + sp * 3) break;
+      if (x < S.left + S.clefW - sp * 4) continue;
+      const past = x < S.playX - sp * 1.5;
+      const bottomLine = g.staff === "t" ? 30 : 18;
+      const isTarget = g.items.some(i => target.has(i.n));
+      // ledger lines
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.globalAlpha = past ? 0.45 : 1;
+      const lo = g.items[0].step, hi = g.items[g.items.length - 1].step;
+      for (let st = bottomLine - 2; st >= lo; st -= 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
+      for (let st = bottomLine + 10; st <= hi; st += 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
+      if (isTarget && !reduceMotion) {
+        const pulse = 0.5 + 0.5 * Math.sin(now / 180);
+        ctx.fillStyle = `rgba(57,182,255,${0.12 + 0.1 * pulse})`;
+        rrect(x - rx * 2.4, yOf(g.staff, hi) - sp * 1.4, rx * 4.8, yOf(g.staff, lo) - yOf(g.staff, hi) + sp * 2.8, sp); ctx.fill();
+      }
+      let stemColor = INK;
+      for (const it of g.items) {
+        const n = it.n, user = isUser(n);
+        const col = n.state === "miss" ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : target.has(n) ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
+          : !user ? "#9aa0ae" : INK;
+        if (it === g.items[g.items.length - 1] || target.has(n)) stemColor = col;
+        const hx = x + (it.side ? (g.up ? rx * 1.9 : -rx * 1.9) : 0), y = yOf(g.staff, it.step);
+        if (target.has(n)) { ctx.shadowColor = col; ctx.shadowBlur = 12; }
+        ctx.fillStyle = ctx.strokeStyle = col;
+        ctx.save(); ctx.translate(hx, y); ctx.rotate(-0.33); ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        if (g.open) { ctx.lineWidth = sp * 0.2; ctx.stroke(); } else ctx.fill();
+        ctx.restore(); ctx.shadowBlur = 0;
+        if (labels) {
+          ctx.font = `800 ${Math.round(sp * 0.92)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillStyle = g.open ? col : "#ffffff"; ctx.fillText(it.name, hx, y + 0.5); ctx.textBaseline = "alphabetic";
+        }
+        if (it.acc) {
+          ctx.fillStyle = col; ctx.font = `700 ${Math.round(sp * 2.1)}px system-ui, serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(it.acc > 0 ? "♯" : "♭", hx - rx * 2.3, y + (it.acc > 0 ? 0 : -sp * 0.3)); ctx.textBaseline = "alphabetic";
+        }
+        if (g.dot) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + rx * 1.8, y - ((it.step - bottomLine) % 2 === 0 ? sp * 0.25 : 0), sp * 0.17, 0, Math.PI * 2); ctx.fill(); }
+      }
+      if (g.stem) {
+        const sx = g.up ? x + rx * 0.92 : x - rx * 0.92;
+        const yLo = yOf(g.staff, lo), yHi = yOf(g.staff, hi);
+        const y0 = g.up ? yLo : yHi, y1 = g.up ? yHi - sp * 3.4 : yLo + sp * 3.4;
+        ctx.strokeStyle = stemColor; ctx.lineWidth = Math.max(1.2, sp * 0.12);
+        ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, y1); ctx.stroke();
+        ctx.lineWidth = Math.max(1.5, sp * 0.22);
+        for (let f = 0; f < g.flags; f++) {
+          const fy = y1 + (g.up ? 1 : -1) * f * sp * 0.8;
+          ctx.beginPath(); ctx.moveTo(sx, fy);
+          ctx.bezierCurveTo(sx + sp * 0.2, fy + (g.up ? 1 : -1) * sp * 0.9, sx + sp * 1.3, fy + (g.up ? 1 : -1) * sp * 1.2, sx + sp * 0.9, fy + (g.up ? 1 : -1) * sp * 2.2);
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    // the clefs stay put; notes slide under them
+    const cover = ctx.createLinearGradient(S.left + S.clefW - sp * 2, 0, S.left + S.clefW + sp * 1.5, 0);
+    cover.addColorStop(0, "#f6f2ea"); cover.addColorStop(1, "rgba(246,242,234,0)");
+    ctx.fillStyle = "#f6f2ea"; ctx.fillRect(S.left, S.top, S.clefW - sp * 2, S.bottom - S.top);
+    ctx.fillStyle = cover; ctx.fillRect(S.left + S.clefW - sp * 2, S.top, sp * 3.5, S.bottom - S.top);
+    ctx.strokeStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = 1;
+    for (const b of [S.trebleBottom, S.bassBottom]) for (let i = 0; i < 5; i++) {
+      const y = Math.round(b - i * sp) + 0.5; ctx.beginPath(); ctx.moveTo(S.left + 8, y); ctx.lineTo(S.left + S.clefW - sp * 1.2, y); ctx.stroke();
+    }
+    ctx.fillStyle = INK; ctx.fillRect(S.left + 8 + sp * 0.6, S.trebleTop, 2, S.bassBottom - S.trebleTop);
+    ctx.lineWidth = sp * 0.35; ctx.beginPath();                                   // the brace joining the two staves
+    const bx = S.left + 8 + sp * 0.2, bm = (S.trebleTop + S.bassBottom) / 2;
+    ctx.moveTo(bx, S.trebleTop); ctx.quadraticCurveTo(bx - sp * 0.9, (S.trebleTop + bm) / 2, bx - sp * 0.4, bm);
+    ctx.quadraticCurveTo(bx - sp * 0.9, (bm + S.bassBottom) / 2, bx, S.bassBottom); ctx.stroke();
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    const clefFont = k => `${sp * k}px "Noto Music", "Bravura", "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif`;
+    ctx.font = clefFont(5.6); ctx.fillText("\u{1D11E}", S.left + 8 + sp * 2.6, S.trebleBottom + sp * 0.9);
+    ctx.font = clefFont(3.9); ctx.fillText("\u{1D122}", S.left + 8 + sp * 2.6, S.bassBottom - sp * 0.75);
+    // play line
+    ctx.shadowColor = "#39b6ff"; ctx.shadowBlur = 10; ctx.fillStyle = "rgba(31,134,201,.85)";
+    ctx.fillRect(S.playX - 1, S.trebleTop - sp * 2.5, 2, S.bassBottom - S.trebleTop + sp * 5);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
   function draw() {
     if (!grad) grad = gradients();
     const now = performance.now();
     ctx.fillStyle = grad.bg; ctx.fillRect(0, 0, W, kbTop);
     // lane guides at each C
     ctx.strokeStyle = "rgba(127,212,255,.06)"; ctx.lineWidth = 1;
-    for (const k of keys) if (!k.black && k.midi % 12 === 0) {
+    if (!(song && !drill && !train && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
     // light beams rising from keys that were just hit
@@ -1009,10 +1251,12 @@
       ctx.fillRect(bm.x - bm.w * (0.5 + a * 0.4), kbTop - kbTop * 0.55, bm.w * (1 + a * 0.8), kbTop * 0.55);
     }
     ctx.globalAlpha = 1;
-    // falling notes
+    // falling notes (or the sheet music)
+    const sheetView = song && !drill && !train && ui.view.value === "sheet";
+    if (sheetView) drawSheet();
     if (song && !drill && !train) {
       const pps = kbTop / LOOKAHEAD;
-      for (const n of song.notes) {
+      if (!sheetView) for (const n of song.notes) {
         if (n.start - time > LOOKAHEAD) break;
         if (n.start + n.dur < time || n.midi < LOW || n.midi > HIGH) continue;
         const k = keyOf(n.midi), inset = k.black ? 0 : k.w * 0.14;
@@ -1226,8 +1470,7 @@
   refreshOptions();
   function songChanged() {
     const def = SONGS[ui.song.value], hasLeft = def.notes ? def.notes.some(n => n[3]) && def.notes.some(n => !n[3]) : !!def.left;
-    for (const o of ui.hand.options) o.disabled = o.value !== "right" && !hasLeft;
-    ui.hand.value = hasLeft ? "both" : "right";      // you play everything unless you choose one hand
+    wantHand = "both";                               // you play everything unless you choose one hand
     $("title").textContent = SONGS[ui.song.value].title;
     reset();
   }
@@ -1308,29 +1551,6 @@
       for (const n of c) n.left = +(n.midi < (cut ?? split));
     }
   }
-  // easier versions: at most a melody note and a bass note at a time, without quiet inner notes or ornaments
-  function simplify(notes) {
-    const res = [];
-    for (const c of clusters(notes)) {
-      const loud = Math.max(...c.map(n => n.amp));
-      const keep = c.filter(n => n.amp >= loud * 0.35 && n.end - n.start >= 0.08);
-      if (!keep.length) continue;
-      const top = keep.reduce((a, b) => b.midi > a.midi ? b : a), low = keep.reduce((a, b) => b.midi < a.midi ? b : a);
-      res.push(top); if (low !== top && low.left) res.push(low);
-    }
-    return res;
-  }
-  function melodyOnly(notes) {
-    const res = [];
-    for (const c of clusters(notes)) {
-      const right = c.filter(n => !n.left);
-      if (!right.length) continue;
-      const top = right.reduce((a, b) => b.midi > a.midi ? b : a);
-      res.push({ ...top, left: 0 });
-    }
-    return res;
-  }
-
   async function transcribe(file, progress) {
     progress("Getting the note finder ready…");
     if (window.KeyfallML) await KeyfallML.prepare();       // loads the model and picks the fastest back-end
@@ -1370,8 +1590,7 @@
     if (!kept.length) throw new Error("No piano notes were found in that recording.");
     assignHands(kept);
     const t0 = kept[0].start;
-    const out = list => list.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left]);
-    return { full: out(kept), simple: out(simplify(kept)), melody: out(melodyOnly(kept)) };
+    return kept.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left, Math.round(n.amp / loud * 100) / 100]);
   }
 
   $("file").onchange = async ev => {
@@ -1386,30 +1605,33 @@
       if (isMidi) notes = parseMidi(await f.arrayBuffer());
       else {
         $("importBtn").classList.add("busy");
-        const versions = await transcribe(f, t => { msg.textContent = t; });
-        notes = versions[ui.importAs.value] || versions.full;
+        notes = await transcribe(f, t => { msg.textContent = t; });
       }
       SONGS.push({ title, by: isMidi ? "Imported" : "From a recording", level: "My songs", notes });
       saveImported(); refreshOptions();
-      msg.textContent = `Added “${title}” (${notes.length} notes).`;
+      msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.`;
       sfx("trained");
       showHome();
     } catch (e) {
+      console.warn("import failed:", e);
       msg.textContent = e && /MIDI|notes|minutes|load/.test(e.message || "") ? e.message
         : isMidi ? "Couldn't read that file. It needs to be a .mid file." : "Couldn't read that recording. Try an MP3, M4A or WAV file.";
     } finally { $("importBtn").classList.remove("busy"); }
   };
-  ui.mode.onchange = ui.hand.onchange = reset;
+  ui.mode.onchange = reset;
+  ui.hand.onchange = () => { wantHand = ui.hand.value; reset(); };
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";
   ui.start.onclick = () => { sfx("click"); toggle(); };
   try { if (localStorage.getItem("keyfall:sfx") === "0") ui.sfx.checked = false; } catch (e) {}
   ui.sfx.onchange = () => { try { localStorage.setItem("keyfall:sfx", ui.sfx.checked ? "1" : "0"); } catch (e) {} };
   ui.pause.onclick = toggle;
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:importAs"); if (v) ui.importAs.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
   try { if (localStorage.getItem("keyfall:ai") === "0") ui.ai.checked = false; } catch (e) {}
   ui.ai.onchange = () => { try { localStorage.setItem("keyfall:ai", ui.ai.checked ? "1" : "0"); } catch (e) {} };
-  ui.importAs.onchange = () => { try { localStorage.setItem("keyfall:importAs", ui.importAs.value); } catch (e) {} };
+  ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };
+  ui.view.onchange = () => { try { localStorage.setItem("keyfall:view", ui.view.value); } catch (e) {} };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
   ui.mic.onclick = toggleMic;
   ui.restart.onclick = () => { reset(); start(); };

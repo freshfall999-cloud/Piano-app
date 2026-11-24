@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Keyfall — Piano Practice</title>
-<link rel="stylesheet" href="style.css?v=202611242005">
+<link rel="stylesheet" href="style.css?v=202611242050">
 </head>
 <body>
 <header id="bar">
@@ -49,6 +49,18 @@
           <option value="practice">Practice: waits for you</option>
           <option value="play">Play: in time, scored</option>
           <option value="listen">Listen: hear the song</option>
+        </select>
+        <label for="view">View</label>
+        <select id="view">
+          <option value="fall">Falling notes</option>
+          <option value="sheet">Sheet music</option>
+        </select>
+        <label for="level">Difficulty</label>
+        <select id="level">
+          <option value="easy">Easy: melody only</option>
+          <option value="medium">Medium: melody + bass</option>
+          <option value="hard" selected>Hard: every note</option>
+          <option value="extra">Extra hard: fuller, with octaves</option>
         </select>
         <label for="hand">Hands</label>
         <select id="hand">
@@ -108,21 +120,14 @@
     <label class="import" id="importBtn">＋ Add your own song (MIDI file or MP3 recording)
       <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi,.mp3,.m4a,.wav,.aac,audio/*" hidden>
     </label>
-    <label class="importas">Recordings become
-      <select id="importAs">
-        <option value="full">Every note</option>
-        <option value="simple">Simplified: melody + bass</option>
-        <option value="melody">Melody only</option>
-      </select>
-    </label>
     <span id="importMsg"></span>
     <div id="list"></div>
     <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0). Recordings are turned into notes on this device with Spotify's Basic Pitch (Apache 2.0).</p>
   </div>
 </div>
-<script src="listen-ml.js?v=202611242005"></script>
-<script src="sound.js?v=202611242005"></script>
-<script src="songs.js?v=202611242005"></script>
-<script src="app.js?v=202611242005"></script>
+<script src="listen-ml.js?v=202611242050"></script>
+<script src="sound.js?v=202611242050"></script>
+<script src="songs.js?v=202611242050"></script>
+<script src="app.js?v=202611242050"></script>
 </body>
 </html>

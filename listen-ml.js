@@ -71,7 +71,7 @@
         const o = O(i, p);
         if (o < 0.5 || o < O(i - 1, p) || o < O(i + 1, p)) continue;             // a peak in the strike map
         if (Math.max(F(i, p), F(i + 1, p), F(i + 2, p)) < 0.3) continue;         // and the key really sounds
-        if (Math.max(rms[i], rms[i + 1], rms[i + 2]) < bg * 4) continue;         // with real sound, not hiss
+        if (Math.max(rms[i], rms[i + 1], rms[i + 2]) < bg * 2) continue;         // with real sound, not hiss
         // a key that was already sounding needs a clear new strike (a ringing note can seem to "re-strike"
         // when another key is played)
         if (Math.max(F(Math.max(0, i - 4), p), F(Math.max(0, i - 3), p)) >= 0.4 && o < 0.85) continue;
@@ -89,7 +89,7 @@
   function startWorker() {
     if (workerStart) return workerStart;
     workerStart = new Promise((ok, fail) => {
-      worker = new Worker("ml-worker.js?v=2");
+      worker = new Worker("ml-worker.js?v=3");
       worker.onmessage = ({ data }) => {
         if (data.type === "ready") { ml.workerReady = true; ml.backend = data.backend; ok(); }
         else if (data.type === "result") {
@@ -153,10 +153,10 @@
   });
   ml.prepare = async () => {
     await loadScript("vendor/tf.min.js");
-    await loadScript("vendor/tf-backend-wasm.min.js");
-    tf.wasm.setWasmPaths(new URL("vendor/", location.href).href);
-    if (tf.getBackend() !== "wasm") { try { await tf.setBackend("wasm"); await tf.ready(); } catch (e) {} }
-    await startWorker().catch(() => {});                            // warm up live listening too
+    // the recording converter uses the graphics chip (WebGL), or plain JavaScript where that's missing
+    try { if (!(await tf.setBackend("webgl"))) await tf.setBackend("cpu"); } catch (e) { await tf.setBackend("cpu"); }
+    await tf.ready();
+    startWorker().catch(() => {});                                  // warm up live listening too
   };
 
   // ---------- for automated tests: feed 22,050 Hz samples directly with a given clock ----------
