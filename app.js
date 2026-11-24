@@ -18,8 +18,10 @@
   const ui = {
     song: $("song"), mode: $("mode"), hand: $("hand"), speed: $("speed"), speedVal: $("speedVal"),
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
-    streak: $("streak"), mic: $("mic"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
+    streak: $("streak"), mic: $("mic"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
   };
+
+  const HINT = ui.hint.textContent;
 
   // ---------- Audio ----------
   let ac = null, master = null;
@@ -220,6 +222,7 @@
   function press(midi, vel) {
     if (down.has(midi)) return;
     down.add(midi); noteOn(midi, vel);
+    if (drill) { drillAnswer(midi); return; }
     if (state !== "running" || mode() === "listen") return;
     if (mode() === "practice") {
       const g = nextGroup();
@@ -276,6 +279,80 @@
     ui.results.hidden = false;
   }
 
+  // ---------- Note practice: read a note on the staff, then play it ----------
+  let drill = null;
+  const SEMI = [0, 2, 4, 5, 7, 9, 11];
+  function nextDrill() {
+    const d = drill;
+    d.clef = ui.dClef.value === "both" ? (Math.random() < 0.5 ? "treble" : "bass") : ui.dClef.value;
+    const base = d.clef === "treble" ? 30 : 18;          // staff step of the bottom line (E4 / G2)
+    const lo = ui.dLedger.checked ? base - 4 : base, hi = ui.dLedger.checked ? base + 12 : base + 8;
+    let step;
+    do step = lo + Math.floor(Math.random() * (hi - lo + 1)); while (step === d.step && d.clef === d.lastClef);
+    const letter = step % 7, oct = Math.floor(step / 7);
+    let acc = 0;
+    if (ui.dAcc.checked && Math.random() < 0.35) {
+      acc = Math.random() < 0.5 ? 1 : -1;
+      if ((acc > 0 && (letter === 2 || letter === 6)) || (acc < 0 && (letter === 0 || letter === 3))) acc = 0;
+    }
+    Object.assign(d, { step, acc, lastClef: d.clef, tries: 0, done: false, wrongKey: null,
+      name: "CDEFGAB"[letter] + (acc > 0 ? "♯" : acc < 0 ? "♭" : "") + oct,
+      target: { midi: 12 * (oct + 1) + SEMI[letter] + acc, start: 0, state: "pending" } });
+  }
+  function startDrill() {
+    reset();
+    drill = {};
+    LOW = 36; HIGH = 84; layout();
+    nextDrill();
+    $("home").hidden = true; $("bar").classList.add("drill"); $("title").textContent = "Note practice";
+    ui.hint.textContent = "Find the note shown on the staff and play it."; ui.hint.hidden = false;
+  }
+  function drillAnswer(midi) {
+    const d = drill;
+    if (d.done) return;
+    ui.hint.hidden = true;
+    if (midi === d.target.midi) {
+      hits++; streak++; bestStreak = Math.max(bestStreak, streak); score += 10;
+      d.done = true; d.doneAt = performance.now();
+      setTimeout(() => { if (drill === d) nextDrill(); }, 550);
+    } else { wrong++; streak = 0; d.tries++; d.wrongKey = midi; d.wrongAt = performance.now(); }
+    updateHud();
+  }
+  function drawStaff() {
+    const d = drill, now = performance.now();
+    const sp = Math.max(10, Math.min(kbTop / 13, 24)), cx = W / 2, sw = Math.min(W * 0.7, 440), x0 = cx - sw / 2;
+    const bottom = kbTop / 2 + 2 * sp, base = d.clef === "treble" ? 30 : 18;
+    const yOf = st => bottom - (st - base) * sp / 2;
+    ctx.strokeStyle = "#cfd3e6"; ctx.lineWidth = 1.5; ctx.fillStyle = "#cfd3e6";
+    for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.moveTo(x0, bottom - i * sp); ctx.lineTo(x0 + sw, bottom - i * sp); ctx.stroke(); }
+    ctx.fillRect(x0, bottom - 4 * sp, 2, 4 * sp); ctx.fillRect(x0 + sw - 2, bottom - 4 * sp, 2, 4 * sp);
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.font = `${sp * (d.clef === "treble" ? 5.6 : 3.9)}px "Noto Music", "Bravura", "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif`;
+    ctx.fillText(d.clef === "treble" ? "\u{1D11E}" : "\u{1D122}", x0 + sp * 2.2, d.clef === "treble" ? bottom + sp * 0.9 : bottom - sp * 0.75);
+    ctx.font = "600 12px system-ui, sans-serif"; ctx.fillStyle = "#a3a8bd";
+    ctx.fillText(d.clef === "treble" ? "TREBLE CLEF" : "BASS CLEF", cx, bottom - 4 * sp - sp * 3.6);
+    // the note
+    const nx = cx + sp, y = yOf(d.step);
+    const bad = d.wrongKey !== null && now - d.wrongAt < 450;
+    const col = d.done ? "#5fd38a" : bad ? "#ff6b7d" : "#ffffff";
+    ctx.strokeStyle = "#cfd3e6";
+    for (let st = base - 2; st >= d.step; st -= 2) { ctx.beginPath(); ctx.moveTo(nx - sp * 1.15, yOf(st)); ctx.lineTo(nx + sp * 1.15, yOf(st)); ctx.stroke(); }
+    for (let st = base + 10; st <= d.step; st += 2) { ctx.beginPath(); ctx.moveTo(nx - sp * 1.15, yOf(st)); ctx.lineTo(nx + sp * 1.15, yOf(st)); ctx.stroke(); }
+    ctx.fillStyle = ctx.strokeStyle = col;
+    ctx.save(); ctx.translate(nx, y); ctx.rotate(-0.35); ctx.beginPath(); ctx.ellipse(0, 0, sp * 0.64, sp * 0.45, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    ctx.lineWidth = 2; ctx.beginPath();
+    if (d.step - base < 4) { ctx.moveTo(nx + sp * 0.58, y - 2); ctx.lineTo(nx + sp * 0.58, y - sp * 3.4); }
+    else { ctx.moveTo(nx - sp * 0.58, y + 2); ctx.lineTo(nx - sp * 0.58, y + sp * 3.4); }
+    ctx.stroke();
+    if (d.acc) { ctx.font = `${sp * 2}px system-ui, sans-serif`; ctx.textBaseline = "middle"; ctx.fillText(d.acc > 0 ? "♯" : "♭", nx - sp * 1.7, y + (d.acc > 0 ? 0 : -sp * 0.3)); ctx.textBaseline = "alphabetic"; }
+    // feedback line under the staff
+    ctx.font = "600 18px system-ui, sans-serif";
+    const fy = Math.min(kbTop - 18, bottom + sp * 5.2);
+    if (d.done) { ctx.fillStyle = "#5fd38a"; ctx.fillText("Correct — " + d.name, cx, fy); }
+    else if (d.tries >= 2) { ctx.fillStyle = "#ffc14d"; ctx.fillText("This is " + d.name + " — the key is highlighted", cx, fy); }
+    else if (d.tries === 1) { ctx.fillStyle = "#ff6b7d"; ctx.fillText("Not quite, try again", cx, fy); }
+  }
+
   // ---------- Microphone listening ----------
   // Hears a real piano through the mic. Two detectors run together:
   //  1. Spectrum: for each note the song is waiting for, look for a fresh rise of energy at that
@@ -330,10 +407,11 @@
   }
 
   function micHit(n, perfect) {
-    registerHit(n, perfect);
+    if (drill) drillAnswer(n.midi); else registerHit(n, perfect);
     mic.armed[n.midi] = 0; mic.peak[n.midi] = mic.sal[n.midi]; mic.hitAt[n.midi] = performance.now();
   }
   function micTargets() {              // notes the song is currently waiting to hear
+    if (drill) return drill.done ? [] : [drill.target];
     if (state !== "running" || mode() === "listen") return [];
     if (mode() === "practice") { const g = nextGroup(); return g.length && g[0].start - time <= 0.35 ? g : []; }
     return song.notes.filter(n => n.state === "pending" && isUser(n) && n.start - time <= HIT_WINDOW && time - n.start <= LATE);
@@ -440,7 +518,7 @@
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
     // falling notes
-    if (song) {
+    if (song && !drill) {
       const pps = kbTop / LOOKAHEAD;
       for (const n of song.notes) {
         if (n.start - time > LOOKAHEAD) break;
@@ -462,12 +540,14 @@
     if (song && state !== "idle" && mode() === "practice") nextGroup().forEach(n => {
       if (n.start - time < 0.01) target.add(n.midi);
     });
-    const lab = ui.labels.value;
+    if (drill && drill.tries >= 2 && !drill.done) target.add(drill.target.midi);
+    const lab = drill ? (ui.dNames.checked ? "notes" : "off") : ui.labels.value;
+    const badKey = drill && drill.wrongKey !== null && performance.now() - drill.wrongAt < 450 ? drill.wrongKey : -1;
     ctx.textAlign = "center";
     for (const pass of [false, true]) for (const k of keys) {
       if (k.black !== pass) continue;
       const on = down.has(k.midi) || autoDown.has(k.midi) || mic.note === k.midi;
-      ctx.fillStyle = on ? "#39b6ff" : target.has(k.midi) ? (pass ? "#2e7d4f" : "#a8f0c0") : pass ? "#181a22" : "#f4f5f9";
+      ctx.fillStyle = k.midi === badKey ? "#ff6b7d" : on ? "#39b6ff" : target.has(k.midi) ? (pass ? "#2e7d4f" : "#a8f0c0") : pass ? "#181a22" : "#f4f5f9";
       rrect(k.x + (pass ? 0 : 1), kbTop, k.w - (pass ? 0 : 2), k.h - 2, 4); ctx.fill();
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
@@ -476,6 +556,7 @@
       ctx.fillStyle = pass ? "#9aa0b8" : "#5a6078";
       ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10);
     }
+    if (drill) drawStaff();
     // hit feedback
     const now = performance.now();
     ctx.font = "bold 13px system-ui, sans-serif";
@@ -520,7 +601,7 @@
   // ---------- Input ----------
   window.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey || /^(SELECT|INPUT)$/.test(e.target.tagName) && e.key !== " ") return;
-    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden) toggle(); return; }
+    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden && !drill) toggle(); return; }
     const m = KEYMAP[e.key.toLowerCase()];
     if (m === undefined) return;
     e.preventDefault();
@@ -594,6 +675,7 @@
   // ---------- Song library screen ----------
   function showHome() {
     if (state === "running") pause();
+    if (drill) { drill = null; $("bar").classList.remove("drill"); ui.hint.textContent = HINT; songChanged(); }
     const list = $("list");
     list.textContent = "";
     for (const level of ["My songs", "Easy", "Medium", "Hard"]) {
@@ -622,6 +704,8 @@
     $("home").hidden = false;
   }
   $("back").onclick = showHome;
+  $("drillBtn").onclick = startDrill;
+  ui.dClef.onchange = ui.dLedger.onchange = ui.dAcc.onchange = () => { if (drill) nextDrill(); };
   $("file").onchange = async ev => {
     const f = ev.target.files[0], msg = $("importMsg");
     ev.target.value = "";
@@ -641,12 +725,12 @@
   ui.restart.onclick = () => { reset(); start(); };
   $("again").onclick = () => { reset(); start(); };
   $("close").onclick = showHome;
-  document.querySelectorAll("select, button").forEach(el => el.addEventListener("change", () => el.blur()));
+  document.querySelectorAll("select, button, input[type=checkbox]").forEach(el => el.addEventListener("change", () => el.blur()));
   document.querySelectorAll("button").forEach(el => el.addEventListener("click", () => el.blur()));
 
   window.addEventListener("resize", layout);
   layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 
-  window.__keyfall = { mic, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { mic, get drill() { return drill; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
 })();

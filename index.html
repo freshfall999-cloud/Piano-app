@@ -7,37 +7,47 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
+<header id="bar">
   <button id="back">‹ Songs</button>
   <h1 id="title">Keyfall</h1>
   <select id="song" hidden></select>
-  <label>Mode
+  <label class="songonly">Mode
     <select id="mode">
       <option value="practice">Practice (waits for you)</option>
       <option value="play">Play (in time, scored)</option>
       <option value="listen">Listen (demo)</option>
     </select>
   </label>
-  <label>Hand
+  <label class="songonly">Hand
     <select id="hand">
       <option value="right">Right hand only</option>
       <option value="left">Left hand only</option>
       <option value="both">Both (you play it all)</option>
     </select>
   </label>
-  <label>Speed <span id="speedVal">100%</span>
+  <label class="songonly">Speed <span id="speedVal">100%</span>
     <input id="speed" type="range" min="40" max="150" step="5" value="100">
   </label>
-  <label>Labels
+  <label class="songonly">Labels
     <select id="labels">
       <option value="keys">Computer keys</option>
       <option value="notes">Note names</option>
       <option value="off">Off</option>
     </select>
   </label>
+  <label class="drillonly">Clef
+    <select id="dClef">
+      <option value="treble">Treble</option>
+      <option value="bass">Bass</option>
+      <option value="both">Both</option>
+    </select>
+  </label>
+  <label class="drillonly"><input type="checkbox" id="dLedger"> Ledger lines</label>
+  <label class="drillonly"><input type="checkbox" id="dAcc"> Sharps &amp; flats</label>
+  <label class="drillonly"><input type="checkbox" id="dNames"> Show key names</label>
   <button id="mic" title="Listen to a real piano through the microphone">🎤 Listen: off</button>
-  <button id="start" class="primary">Start</button>
-  <button id="restart">Restart</button>
+  <button id="start" class="primary songonly">Start</button>
+  <button id="restart" class="songonly">Restart</button>
   <div id="hud">
     <span>Score <b id="score">0</b></span>
     <span>Streak <b id="streak">0</b></span>
@@ -63,6 +73,10 @@
   <div class="inner">
     <div class="brand">Keyfall</div>
     <p class="sub">Choose a song to practice</p>
+    <button id="drillBtn" class="drillcard">
+      <span class="t">🎼 Note practice</span>
+      <span class="by">A note appears on the staff — find it and play it</span>
+    </button>
     <label class="import">＋ Add your own song (MIDI file)
       <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
     </label>
