@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Keyfall — Piano Practice</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Keyfall</h1>
+  <label>Song
+    <select id="song"></select>
+  </label>
+  <label>Mode
+    <select id="mode">
+      <option value="practice">Practice (waits for you)</option>
+      <option value="play">Play (in time, scored)</option>
+      <option value="listen">Listen (demo)</option>
+    </select>
+  </label>
+  <label>Hand
+    <select id="hand">
+      <option value="right">Right</option>
+      <option value="left">Left</option>
+      <option value="both">Both</option>
+    </select>
+  </label>
+  <label>Speed <span id="speedVal">100%</span>
+    <input id="speed" type="range" min="40" max="150" step="5" value="100">
+  </label>
+  <label>Labels
+    <select id="labels">
+      <option value="keys">Computer keys</option>
+      <option value="notes">Note names</option>
+      <option value="off">Off</option>
+    </select>
+  </label>
+  <button id="start" class="primary">Start</button>
+  <button id="restart">Restart</button>
+  <div id="hud">
+    <span>Score <b id="score">0</b></span>
+    <span>Streak <b id="streak">0</b></span>
+    <span>Accuracy <b id="acc">–</b></span>
+    <span id="midi" title="MIDI keyboard status">MIDI: –</span>
+  </div>
+</header>
+<main>
+  <canvas id="stage"></canvas>
+  <div id="hint">Pick a song and press Start — or just play freely. Use your computer keyboard, mouse/touch, or a MIDI keyboard. Space = start/pause.</div>
+  <div id="results" hidden>
+    <div class="card">
+      <h2 id="resTitle">Song complete</h2>
+      <div id="stars"></div>
+      <p id="resBody"></p>
+      <p id="resBest"></p>
+      <button id="again" class="primary">Play again</button>
+      <button id="close">Close</button>
+    </div>
+  </div>
+</main>
+<script src="songs.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

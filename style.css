@@ -1,0 +1,48 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  background: #12141c; color: #e8eaf2;
+  font: 14px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden; touch-action: none;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 14px; background: #1b1e2a; border-bottom: 1px solid #2c3042;
+}
+h1 { font-size: 18px; margin: 0 6px 0 0; letter-spacing: .5px; color: #7fd4ff; }
+label { display: flex; align-items: center; gap: 6px; color: #a3a8bd; }
+select, button, input { font: inherit; }
+select, button {
+  background: #262a3a; color: #e8eaf2; border: 1px solid #3a3f56;
+  border-radius: 6px; padding: 5px 10px;
+}
+button { cursor: pointer; }
+button:hover { background: #30354a; }
+button.primary { background: #2f8fd8; border-color: #2f8fd8; color: #fff; font-weight: 600; }
+button.primary:hover { background: #3aa0ec; }
+#speed { width: 110px; }
+#speedVal { color: #e8eaf2; min-width: 38px; }
+#hud { margin-left: auto; display: flex; gap: 14px; color: #a3a8bd; }
+#hud b { color: #fff; font-variant-numeric: tabular-nums; }
+main { position: relative; flex: 1; min-height: 0; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#hint {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  max-width: 90%; padding: 8px 14px; border-radius: 8px;
+  background: rgba(27, 30, 42, .85); color: #a3a8bd; text-align: center; pointer-events: none;
+}
+#results {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 11, 16, .7);
+}
+#results[hidden] { display: none; }
+.card {
+  background: #1b1e2a; border: 1px solid #3a3f56; border-radius: 12px;
+  padding: 22px 30px; text-align: center; min-width: 280px;
+}
+.card h2 { margin: 0 0 6px; }
+#stars { font-size: 40px; color: #ffcc4d; letter-spacing: 6px; }
+#stars .off { color: #3a3f56; }
+#resBest { color: #a3a8bd; }
+.card button { margin: 4px; }
