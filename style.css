@@ -165,3 +165,4 @@ button.primary:hover { background: linear-gradient(#63c0ff, #2b86e0); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .song.mysongs { padding-right: 40px; }
 .song .t { overflow-wrap: anywhere; }
+.importas { display: inline-flex; margin: 6px 0 0 10px; }

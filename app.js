@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), importAs: $("importAs"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -1270,6 +1270,50 @@
     el.src = src; el.onload = ok; el.onerror = () => fail(new Error("Couldn't load " + src));
     document.head.append(el);
   });
+  // notes struck together (within 50 ms)
+  function clusters(notes) {
+    const out = [];
+    for (const n of notes) { const c = out[out.length - 1]; if (c && n.start - c[0].start < 0.05) c.push(n); else out.push([n]); }
+    return out;
+  }
+  // Left or right hand: notes far apart in a chord are split at the widest gap; otherwise a split point that follows
+  // the music (starting at middle C) decides, so a melody that dips below middle C stays in the right hand.
+  function assignHands(notes) {
+    let split = 60;
+    for (const c of clusters(notes)) {
+      const ps = c.map(n => n.midi).sort((a, b) => a - b);
+      let cut = null;
+      if (ps[ps.length - 1] - ps[0] >= 12) {
+        let gap = -1;
+        for (let i = 1; i < ps.length; i++) if (ps[i] - ps[i - 1] > gap) { gap = ps[i] - ps[i - 1]; cut = (ps[i] + ps[i - 1]) / 2; }
+        split = split * 0.6 + cut * 0.4;
+      }
+      for (const n of c) n.left = +(n.midi < (cut ?? split));
+    }
+  }
+  // easier versions: at most a melody note and a bass note at a time, without quiet inner notes or ornaments
+  function simplify(notes) {
+    const res = [];
+    for (const c of clusters(notes)) {
+      const loud = Math.max(...c.map(n => n.amp));
+      const keep = c.filter(n => n.amp >= loud * 0.35 && n.end - n.start >= 0.08);
+      if (!keep.length) continue;
+      const top = keep.reduce((a, b) => b.midi > a.midi ? b : a), low = keep.reduce((a, b) => b.midi < a.midi ? b : a);
+      res.push(top); if (low !== top && low.left) res.push(low);
+    }
+    return res;
+  }
+  function melodyOnly(notes) {
+    const res = [];
+    for (const c of clusters(notes)) {
+      const right = c.filter(n => !n.left);
+      if (!right.length) continue;
+      const top = right.reduce((a, b) => b.midi > a.midi ? b : a);
+      res.push({ ...top, left: 0 });
+    }
+    return res;
+  }
+
   async function transcribe(file, progress) {
     progress("Getting the note finder ready…");
     if (!window.tf) await loadScript("vendor/tf.min.js");
@@ -1294,23 +1338,22 @@
     window.__bpRaw = { frames, onsets };                 // kept for automated accuracy tests
     // thresholds tuned on piano recordings with known notes (10 pieces): 97% of notes found, almost no extra ones
     const found = noteFramesToTime(outputToNotesPoly(frames, onsets, 0.7, 0.45, 7, true, null, null, false, 11));
-    // keep real piano notes; quieter echoes of a note, very short blips and overlapping duplicates go
+    // keep real piano notes: very short blips and very quiet echoes go, and a key "struck" twice within 80 ms is one strike.
+    // (The thresholds above already split notes only at real strikes, so repeated notes stay separate.)
     const loud = Math.max(...found.map(n => n.amplitude), 0);
     const kept = [], lastOf = {};
     for (const n of found.filter(n => n.pitchMidi >= 21 && n.pitchMidi <= 108 && n.durationSeconds >= 0.06 && n.amplitude >= loud * 0.12)
       .sort((x, y) => x.startTimeSeconds - y.startTimeSeconds)) {
       const prev = lastOf[n.pitchMidi], s0 = n.startTimeSeconds, s1 = s0 + n.durationSeconds;
-      // a note still ringing gets cut into a new piece whenever another key is struck: if this piece carries
-      // straight on from the same key and isn't louder, it's the same note, so join it back on
-      if (prev && prev.end >= s0 - 0.06 && (n.amplitude <= prev.amp * 0.9 || s0 - prev.start < 0.08)) { prev.end = Math.max(prev.end, s1); continue; }
+      if (prev && s0 - prev.start < 0.08) { prev.end = Math.max(prev.end, s1); continue; }
       const k = { midi: n.pitchMidi, start: s0, end: s1, amp: n.amplitude };
       kept.push(k); lastOf[n.pitchMidi] = k;
     }
-    let notes = kept.map(n => [n.midi, Math.round(n.start * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, +(n.midi < 60)]);
-    if (!notes.length) throw new Error("No piano notes were found in that recording.");
-    const t0 = notes[0][1];
-    notes.forEach(n => n[1] = Math.round((n[1] - t0) * 1000) / 1000);
-    return notes;
+    if (!kept.length) throw new Error("No piano notes were found in that recording.");
+    assignHands(kept);
+    const t0 = kept[0].start;
+    const out = list => list.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left]);
+    return { full: out(kept), simple: out(simplify(kept)), melody: out(melodyOnly(kept)) };
   }
 
   $("file").onchange = async ev => {
@@ -1325,7 +1368,8 @@
       if (isMidi) notes = parseMidi(await f.arrayBuffer());
       else {
         $("importBtn").classList.add("busy");
-        notes = await transcribe(f, t => { msg.textContent = t; });
+        const versions = await transcribe(f, t => { msg.textContent = t; });
+        notes = versions[ui.importAs.value] || versions.full;
       }
       SONGS.push({ title, by: isMidi ? "Imported" : "From a recording", level: "My songs", notes });
       saveImported(); refreshOptions();
@@ -1344,6 +1388,8 @@
   ui.sfx.onchange = () => { try { localStorage.setItem("keyfall:sfx", ui.sfx.checked ? "1" : "0"); } catch (e) {} };
   ui.pause.onclick = toggle;
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:importAs"); if (v) ui.importAs.value = v; } catch (e) {}
+  ui.importAs.onchange = () => { try { localStorage.setItem("keyfall:importAs", ui.importAs.value); } catch (e) {} };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
   ui.mic.onclick = toggleMic;
   ui.restart.onclick = () => { reset(); start(); };
