@@ -376,6 +376,7 @@
   const mic = {
     on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, level: 0, yinAt: 0, bands: [],
     L: new Float32Array(128).fill(-200), F: new Float32Array(128), live: new Float32Array(128).fill(-200), spread: new Float32Array(128).fill(9),
+    over: new Uint16Array(128), startAt: 0,
     sal: new Float32Array(130).fill(-200), hist: [],
     armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
     onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
@@ -425,9 +426,15 @@
       return;
     }
     if (!audio() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { ui.mic.textContent = "🎤 Mic unsupported"; return; }
+    // ask for the raw microphone: voice processing (echo cancellation, noise suppression, auto gain) treats
+    // a held piano note as noise and turns soft playing down
+    const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     try {
-      mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      try { mic.stream = await navigator.mediaDevices.getUserMedia({ audio: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { exact: v }])) }); }
+      catch (e) { if (e && e.name === "NotAllowedError") throw e; mic.stream = await navigator.mediaDevices.getUserMedia({ audio: raw }); }
     } catch (e) { ui.mic.textContent = "🎤 Mic blocked"; return; }
+    const track = mic.stream.getAudioTracks()[0], st = track && track.getSettings ? track.getSettings() : {};
+    mic.filtered = st.echoCancellation === true || st.noiseSuppression === true || st.autoGainControl === true;
     mic.analyser = ac.createAnalyser();
     mic.analyser.fftSize = 8192; mic.analyser.smoothingTimeConstant = 0;
     ac.createMediaStreamSource(mic.stream).connect(mic.analyser);
@@ -443,7 +450,7 @@
       if (i1 < i0) i0 = i1 = Math.round(f / hz);
       mic.bands[k] = [i0, Math.min(i1, nb - 1)];
     }
-    mic.hist = []; mic.live.fill(-200); mic.spread.fill(9);
+    mic.hist = []; mic.live.fill(-200); mic.spread.fill(9); mic.over.fill(0); mic.roomDb = null; mic.startAt = performance.now();
     mic.on = true; ui.mic.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
   }
 
@@ -485,7 +492,8 @@
     const x = mic.buf.subarray(mic.buf.length - 4096);
     let e = 0;
     for (let i = 0; i < x.length; i++) e += x[i] * x[i];
-    const rms = mic.level = Math.sqrt(e / x.length);
+    const rms = mic.level = Math.sqrt(e / x.length), db = mic.db = 20 * Math.log10(rms + 1e-9);
+    mic.roomDb = mic.roomDb == null ? db : mic.roomDb + (db - mic.roomDb) * (db < mic.roomDb ? 0.05 : 0.002);
 
     // --- band levels (dB) for every key, and a slow estimate of each band's background level
     const spec = mic.spec, L = mic.L, F = mic.F, live = mic.live, hz = sr / mic.analyser.fftSize, nb = spec.length;
@@ -498,8 +506,12 @@
       // background level per band: a running mean and spread that ignore anything far above it (the notes)
       const d = pk - live[k], sp = mic.spread;
       if (live[k] <= -199) { live[k] = pk; sp[k] = 9; }
-      else if (d < 3 * Math.sqrt(sp[k]) + 3) { live[k] += 0.01 * d; sp[k] += 0.01 * (d * d - sp[k]); }
-      else live[k] += 0.0005 * d;
+      else if (now - mic.startAt < 1000) { live[k] += 0.1 * d; sp[k] = Math.max(1, sp[k] + 0.1 * (d * d - sp[k])); }   // settling in
+      else if (d < 3 * Math.sqrt(sp[k]) + 3) {
+        live[k] += (d < 0 ? 0.03 : 0.01) * d; sp[k] = Math.max(1, sp[k] + 0.01 * (d * d - sp[k])); mic.over[k] = 0;
+      } else if (++mic.over[k] > 120) {               // louder for 2 seconds straight: that's the room now, not a note
+        live[k] += 0.05 * d; sp[k] = Math.max(1, sp[k] + 0.05 * (d * d - sp[k]));
+      }
     }
     // --- untrained salience: three overtones from 250 Hz up
     for (let m = 21; m <= 108; m++) {
@@ -530,15 +542,24 @@
       const sample = [];
       for (let b = Math.round(200 / hz); b < 4000 / hz && b < nb; b += 4) sample.push(spec[b]);
       sample.sort((a, b) => a - b);
-      const floor = Math.max(sample[Math.floor(sample.length * 0.3)], -110);
+      const floor = Math.max(sample[Math.floor(sample.length * 0.3)], -160);
       // --- decide, for every key, whether it was just struck
       for (let m = 21; m <= 108; m++) {
         // untrained check: three overtones from 250 Hz up stand out and just jumped
         const s = mic.sal[m], level = s;
         let lo = s;
         for (const h of hist) if (h.s[m] < lo) lo = h.s[m];
-        let strict = s >= mic.sal[m - 1] + 4 && s >= mic.sal[m + 1] + 4 && s >= floor + S.gFloor && s >= -95 && s - lo >= S.gRise;
-        let soft = s >= mic.sal[m - 1] + 2 && s >= mic.sal[m + 1] + 2 && s >= floor + S.gFloor - 6 && s - lo >= S.gRise * 0.5;
+        // ...and at least one of those overtones rose clearly above the background in its own frequency range
+        // (a fan or traffic rumble is far louder in the low range than the treble, so one overall level isn't enough)
+        let own = 0, ownSoft = 0;
+        for (const o of HARM) {
+          const b = m + o;
+          if (b > BHI) break;
+          if (L[b] >= noiseAt(b) + S.tMargin && F[b] >= S.gRise && peaky(b, 2)) own = 1;
+          if (L[b] >= noiseAt(b) + S.tMargin * 0.6 && F[b] >= S.gRise * 0.5) ownSoft = 1;
+        }
+        let strict = own && s >= mic.sal[m - 1] + 4 && s >= mic.sal[m + 1] + 4 && s >= floor + S.gFloor && s - lo >= S.gRise;
+        let soft = ownSoft && s >= mic.sal[m - 1] + 2 && s >= mic.sal[m + 1] + 2 && s >= floor + S.gFloor - 6 && s - lo >= S.gRise * 0.5;
         // trained check: the bands where this key was heard during training (either check is enough)
         const t = tmpl[m];
         if (t && !strict) {
@@ -609,7 +630,7 @@
     hist.push({ t: now, L: L.slice(), s: mic.sal.slice() });
 
     // --- pitch readout
-    if (rms < 0.003) { mic.note = mic.cand = null; mic.count = 0; return; }
+    if (db < mic.roomDb + 6) { mic.note = mic.cand = null; mic.count = 0; return; }
     if (now - mic.yinAt < 50) return;
     mic.yinAt = now;
     const f = detectPitch(x, sr), midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
@@ -825,12 +846,14 @@
     ctx.globalAlpha = 1;
     // microphone meter: shows that the app is hearing something, and which note
     if (mic.on) {
-      const lv = Math.min(1, Math.sqrt((mic.level || 0) * 12)), x = W - 176, y = 12;
-      ctx.fillStyle = "rgba(27,30,42,.9)"; rrect(x, y, 164, 34, 8); ctx.fill();
+      // how far the sound is above the room's background, on a 0–40 dB scale
+      const above = (mic.db ?? -200) - (mic.roomDb ?? 0), lv = Math.max(0, Math.min(1, above / 40)), x = W - 176, y = 12;
+      ctx.fillStyle = "rgba(27,30,42,.9)"; rrect(x, y, 164, mic.filtered ? 50 : 34, 8); ctx.fill();
       ctx.fillStyle = "#2c3042"; ctx.fillRect(x + 10, y + 22, 144, 5);
-      ctx.fillStyle = lv > 0.12 ? "#5fd38a" : "#56607f"; ctx.fillRect(x + 10, y + 22, 144 * lv, 5);
+      ctx.fillStyle = above > 6 ? "#5fd38a" : "#56607f"; ctx.fillRect(x + 10, y + 22, 144 * lv, 5);
       ctx.font = "12px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.fillStyle = "#e8eaf2";
       ctx.fillText(mic.note != null ? "Hearing: " + NAMES[mic.note % 12] + (Math.floor(mic.note / 12) - 1) : "Listening…", x + 10, y + 15);
+      if (mic.filtered) { ctx.fillStyle = "#ffc14d"; ctx.fillText("The device is filtering the mic", x + 10, y + 43); }
       ctx.textAlign = "center";
     }
     // countdown / progress
