@@ -250,7 +250,7 @@
       if (n.start > time) break;
       if (!isUser(n)) {
         if (!n.played) { n.played = true; n.state = "hit"; noteOn(n.midi, 0.6); autoDown.set(n.midi, n.start + n.dur * 0.92); }
-      } else if (mode() === "play" && n.state === "pending" && time > n.start + HIT_WINDOW) {
+      } else if (mode() === "play" && n.state === "pending" && time > n.start + (mic.on ? LATE : HIT_WINDOW)) {
         n.state = "miss"; misses++; streak = 0; updateHud();
       }
     }
@@ -277,10 +277,17 @@
   }
 
   // ---------- Microphone listening ----------
-  // Hears an acoustic/digital piano through the mic. Single notes are found by pitch
-  // detection (YIN); chords are confirmed by looking for each expected note in the spectrum.
-  const mic = { on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, rms: [], lastTrig: 0 };
-  const sameNote = (a, b) => a === b || Math.abs(a - b) === 12;   // forgive octave slips of the detector
+  // Hears a real piano through the mic. Two detectors run together:
+  //  1. Spectrum: for each note the song is waiting for, look for a fresh rise of energy at that
+  //     note's harmonics. Works with chords, pedal and notes still ringing.
+  //  2. Pitch (YIN): names the single clearest note, used for the on-screen meter and as a backup.
+  const mic = {
+    on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, rms: [], lastTrig: 0, level: 0,
+    sal: new Float32Array(128), hist: Array.from({ length: 14 }, () => new Float32Array(128).fill(-200)), hi: 0,
+    armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
+  };
+  const sameNote = (a, b) => a === b || Math.abs(a - b) === 12;   // forgive octave slips of the pitch detector
+  const LATE = 0.35;                                               // hearing lags the key press a little
 
   async function toggleMic() {
     if (mic.on) {
@@ -322,54 +329,76 @@
     return sr / (tau + (den ? (a - c) / (2 * den) : 0));
   }
 
-  function heard(midi) {               // the mic picked up a freshly struck note
+  function micHit(n, perfect) {
+    registerHit(n, perfect);
+    mic.armed[n.midi] = 0; mic.peak[n.midi] = mic.sal[n.midi]; mic.hitAt[n.midi] = performance.now();
+  }
+  function micTargets() {              // notes the song is currently waiting to hear
+    if (state !== "running" || mode() === "listen") return [];
+    if (mode() === "practice") { const g = nextGroup(); return g.length && g[0].start - time <= 0.35 ? g : []; }
+    return song.notes.filter(n => n.state === "pending" && isUser(n) && n.start - time <= HIT_WINDOW && time - n.start <= LATE);
+  }
+  const micPerfect = n => mode() === "practice" || Math.abs(n.start - time) <= PERFECT + 0.12;
+
+  function heard(midi) {               // pitch detector: a freshly struck single note
     mic.lastTrig = performance.now();
-    if (state !== "running" || mode() === "listen") return;
-    let n = null;
-    if (mode() === "practice") {
-      const g = nextGroup();
-      if (g.length && g[0].start - time <= 0.35) n = g.find(n => sameNote(n.midi, midi));
-    } else {
-      for (const c of song.notes)
-        if (c.state === "pending" && isUser(c) && sameNote(c.midi, midi) && Math.abs(c.start - time) <= HIT_WINDOW &&
-            (!n || Math.abs(c.start - time) < Math.abs(n.start - time))) n = c;
-    }
-    if (n) registerHit(n, mode() === "practice" || Math.abs(n.start - time) <= PERFECT);
+    const n = micTargets().find(n => sameNote(n.midi, midi) && mic.armed[n.midi]);
+    if (n) micHit(n, micPerfect(n));
   }
 
   function micTick() {
     if (!mic.on) return;
+    const now = performance.now(), sr = ac.sampleRate;
     mic.analyser.getFloatTimeDomainData(mic.buf);
     const x = mic.buf.subarray(mic.buf.length - 4096);
     let e = 0;
     for (let i = 0; i < x.length; i++) e += x[i] * x[i];
     const rms = Math.sqrt(e / x.length);
-    mic.rms.push(rms); if (mic.rms.length > 5) mic.rms.shift();
     mic.level = rms;
+    mic.rms.push(rms); if (mic.rms.length > 5) mic.rms.shift();
+
+    // --- spectrum: how strongly each piano key is sounding (dB), from three of its harmonics
+    const spec = mic.spec, hz = sr / mic.analyser.fftSize, nb = spec.length;
+    mic.analyser.getFloatFrequencyData(spec);
+    const sample = [];
+    for (let b = Math.round(200 / hz); b < 4000 / hz && b < nb; b += 4) sample.push(spec[b]);
+    sample.sort((a, b) => a - b);
+    const floor = Math.max(sample[Math.floor(sample.length * 0.3)], -110);
+    const prev = mic.hist[mic.hi]; mic.hi = (mic.hi + 1) % mic.hist.length;
+    prev.set(mic.sal);                                   // oldest slot now holds the previous frame
+    for (let m = 21; m <= 108; m++) {
+      const f = 440 * Math.pow(2, (m - 69) / 12), h0 = Math.max(1, Math.ceil(250 / f));
+      let acc = 0;
+      for (let h = h0; h < h0 + 3; h++) {
+        const b = Math.round(h * f / hz), tol = Math.max(1, Math.round(b * 0.012));
+        let pk = -200;
+        for (let k = b - tol; k <= b + tol && k < nb; k++) if (spec[k] > pk) pk = spec[k];
+        acc += Math.pow(10, Math.max(pk, -200) / 10);
+      }
+      const s = mic.sal[m] = 10 * Math.log10(acc / 3 + 1e-20);
+      if (!mic.armed[m]) {                               // re-arm once the note has died down a bit
+        if (s > mic.peak[m]) mic.peak[m] = s;
+        if (s < mic.peak[m] - 3 || now - mic.hitAt[m] > 700) mic.armed[m] = 1;
+      }
+    }
+    for (const n of micTargets()) {
+      const m = n.midi, s = mic.sal[m];
+      if (!mic.armed[m] || s < floor + 20 || s < -85) continue;
+      if (s < mic.sal[m - 1] + 4 || s < mic.sal[m + 1] + 4) continue;   // must stand out from neighbouring keys
+      let lo = Infinity;
+      for (const h of mic.hist) if (h[m] < lo) lo = h[m];
+      if (s >= lo + 4) micHit(n, micPerfect(n));                          // energy just rose: the key was struck
+    }
+
+    // --- pitch detector
     if (rms < 0.004) { mic.note = mic.cand = null; mic.count = 0; return; }
-    const f = detectPitch(x, ac.sampleRate);
+    const f = detectPitch(x, sr);
     const midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
     if (midi !== null && midi >= 33 && midi <= 105) {
       if (midi === mic.cand) mic.count++; else { mic.cand = midi; mic.count = 1; }
       if (mic.count >= 2) {
-        const restruck = rms > mic.rms[0] * 1.5 && performance.now() - mic.lastTrig > 120;
+        const restruck = rms > mic.rms[0] * 1.5 && now - mic.lastTrig > 120;
         if (midi !== mic.note || restruck) { mic.note = midi; heard(midi); }
-      }
-    }
-    // chords: check each expected note's fundamental in the spectrum
-    if (state === "running" && mode() === "practice") {
-      const g = nextGroup();
-      if (!g.length || g[0].start - time > 0.05) return;
-      if (song.notes.filter(n => isUser(n) && Math.abs(n.start - g[0].start) < 1e-6).length < 2) return;
-      mic.analyser.getFloatFrequencyData(mic.spec);
-      const hz = ac.sampleRate / mic.analyser.fftSize;
-      let avg = 0, cnt = 0;
-      for (let b = Math.round(100 / hz); b < 2000 / hz; b++) { avg += mic.spec[b]; cnt++; }
-      avg /= cnt;
-      for (const n of g) {
-        const b = Math.round(440 * Math.pow(2, (n.midi - 69) / 12) / hz);
-        const peak = Math.max(mic.spec[b - 1], mic.spec[b], mic.spec[b + 1]);
-        if (peak > -60 && peak > avg + 20) registerHit(n, true);
       }
     }
   }
@@ -556,7 +585,7 @@
   function songChanged() {
     const def = SONGS[ui.song.value], hasLeft = def.notes ? def.notes.some(n => n[3]) && def.notes.some(n => !n[3]) : !!def.left;
     for (const o of ui.hand.options) o.disabled = o.value !== "right" && !hasLeft;
-    if (!hasLeft) ui.hand.value = "right";
+    ui.hand.value = hasLeft ? "both" : "right";      // you play everything unless you choose one hand
     $("title").textContent = SONGS[ui.song.value].title;
     reset();
   }
@@ -619,5 +648,5 @@
   layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 
-  window.__keyfall = { get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { mic, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
 })();
