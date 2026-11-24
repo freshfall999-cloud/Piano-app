@@ -665,15 +665,14 @@
           // watched overtone (peak bin, refined by fitting a parabola) whenever it is clearly loud.
           const rb = mic.ref[m];
           // a piano note fades slowly after its strike; a syllable of speech collapses within a tenth of a second
-          // (measured only down to the background: a soft note just above the hiss can't "collapse" by more than that)
           if (rb > 0) {
             if (L[rb] > mic.pk[m]) mic.pk[m] = L[rb];
-            else mic.drop[m] = Math.max(mic.drop[m], mic.pk[m] - Math.max(L[rb], noiseAt(rb)));
+            else mic.drop[m] = Math.max(mic.drop[m], mic.pk[m] - L[rb]);
           }
           const rb2 = mic.ref2[m];
           if (rb2 > 0) {
             if (L[rb2] > mic.pk2[m]) mic.pk2[m] = L[rb2];
-            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - Math.max(L[rb2], noiseAt(rb2)));
+            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - L[rb2]);
           }
           if (rb >= 62 && L[rb] >= noiseAt(rb) + 12 && peaky(rb, 3)) {
             const [i0, i1] = mic.bands[rb];
