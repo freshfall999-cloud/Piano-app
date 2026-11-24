@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), importAs: $("importAs"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), importAs: $("importAs"), ai: $("ai"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -306,7 +306,7 @@
           if (!mic.on) noteOn(n.midi, 0.6);                // silent while listening: the microphone would hear it
           autoDown.set(n.midi, n.start + n.dur * 0.92);
         }
-      } else if (mode() === "play" && n.state === "pending" && time > n.start + (mic.on ? LATE : HIT_WINDOW)) {
+      } else if (mode() === "play" && n.state === "pending" && time > n.start + lateBy()) {
         n.state = "miss"; misses++; streak = 0; updateHud();
       }
     }
@@ -486,6 +486,7 @@
   async function toggleMic() {
     if (mic.on) {
       mic.stream.getTracks().forEach(t => t.stop());
+      if (window.KeyfallML) KeyfallML.stop();
       mic.on = false; mic.note = null; ui.micText.textContent = "🎤 Listen: off"; ui.mic.classList.remove("primary");
       return;
     }
@@ -501,7 +502,9 @@
     mic.filtered = st.echoCancellation === true || st.noiseSuppression === true || st.autoGainControl === true;
     mic.analyser = ac.createAnalyser();
     mic.analyser.fftSize = 8192; mic.analyser.smoothingTimeConstant = 0;
-    ac.createMediaStreamSource(mic.stream).connect(mic.analyser);
+    const micSource = ac.createMediaStreamSource(mic.stream);
+    micSource.connect(mic.analyser);
+    if (window.KeyfallML && ui.ai.checked) KeyfallML.start(ac, micSource);
     // Safari only processes nodes that lead to the speakers, so route through a silent gain
     const mute = ac.createGain(); mute.gain.value = 0;
     mic.analyser.connect(mute).connect(ac.destination);
@@ -541,12 +544,13 @@
     mic.acceptedAt[n.midi] = performance.now();
     if (drill) drillAnswer(n.midi); else registerHit(n, perfect);
   }
+  const lateBy = () => mic.on && window.KeyfallML && KeyfallML.state === "on" ? 0.9 : mic.on ? LATE : HIT_WINDOW;
   function micTargets() {              // notes the song is currently waiting to hear
     if (train) return [];
     if (drill) return drill.done ? [] : [drill.target];
     if (state !== "running" || mode() === "listen") return [];
     if (mode() === "practice") { const g = nextGroup(); return g.length && g[0].start - time <= 0.35 ? g : []; }
-    return song.notes.filter(n => n.state === "pending" && isUser(n) && n.start - time <= HIT_WINDOW && time - n.start <= LATE);
+    return song.notes.filter(n => n.state === "pending" && isUser(n) && n.start - time <= HIT_WINDOW && time - n.start <= lateBy());
   }
   const micPerfect = (n, ago = 0) => mode() === "practice" || Math.abs(n.start - (time - ago / 1000 * ui.speed.value / 100)) <= PERFECT + 0.12;
 
@@ -765,7 +769,19 @@
       }
       // --- match what was heard to the notes the song is waiting for
       const targets = micTargets();
-      if (targets.length) {
+      const AI = window.KeyfallML && KeyfallML.state === "on" && !train;
+      if (AI && targets.length) {
+        // the trained model reports each key it heard struck, with the time it happened (about 0.3 s later)
+        const keepAI = drill || mode() === "practice" ? 1500 : 900;
+        for (const n of targets) {
+          const m = n.midi, at = KeyfallML.onsetAt[m];
+          if (at > mic.usedAt[m] && now - at <= keepAI) {
+            mic.usedAt[m] = at;
+            mic.acceptedAt[m] = now;
+            if (drill) drillAnswer(m); else registerHit(n, micPerfect(n, now - at));
+          }
+        }
+      } else if (targets.length) {
         const keep = drill || mode() === "practice" ? 800 : 250;
         // every note of the chord being played, including ones already heard, so C3 + C4 isn't mistaken for a lone C3
         const t0 = Math.min(...targets.map(n => n.start)), t1 = Math.max(...targets.map(n => n.start));
@@ -1118,7 +1134,8 @@
     if (mic.on) {
       const above = (mic.db ?? -200) - (mic.roomDb ?? 0), lv = Math.max(0, Math.min(1, above / 40));
       ui.micLvl.style.width = (lv * 100).toFixed(1) + "%";
-      const t = mic.note != null ? "🎤 Hearing " + nm(mic.note) : "🎤 Listening";
+      const st = window.KeyfallML ? KeyfallML.state : "off";
+      const t = st === "loading" ? "🎤 Loading AI…" : (mic.note != null ? "🎤 Hearing " + nm(mic.note) : "🎤 Listening") + (st === "on" ? " · AI" : "");
       if (ui.micText.textContent !== t) ui.micText.textContent = t;
       ui.mic.classList.toggle("warn", !!mic.filtered);
       ui.mic.title = mic.filtered ? "The device is filtering the microphone, which can hide soft notes" : "Listening to your piano. Tap to stop.";
@@ -1316,7 +1333,8 @@
 
   async function transcribe(file, progress) {
     progress("Getting the note finder ready…");
-    if (!window.tf) await loadScript("vendor/tf.min.js");
+    if (window.KeyfallML) await KeyfallML.prepare();       // loads the model and picks the fastest back-end
+    else if (!window.tf) await loadScript("vendor/tf.min.js");
     if (!window.BasicPitchLib) await loadScript("vendor/basic-pitch/basic-pitch.js");
     progress("Reading the recording…");
     const data = await file.arrayBuffer(), ctx = audio();
@@ -1389,6 +1407,8 @@
   ui.pause.onclick = toggle;
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:importAs"); if (v) ui.importAs.value = v; } catch (e) {}
+  try { if (localStorage.getItem("keyfall:ai") === "0") ui.ai.checked = false; } catch (e) {}
+  ui.ai.onchange = () => { try { localStorage.setItem("keyfall:ai", ui.ai.checked ? "1" : "0"); } catch (e) {} };
   ui.importAs.onchange = () => { try { localStorage.setItem("keyfall:importAs", ui.importAs.value); } catch (e) {} };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
   ui.mic.onclick = toggleMic;

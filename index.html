@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Keyfall — Piano Practice</title>
-<link rel="stylesheet" href="style.css?v=202611241850">
+<link rel="stylesheet" href="style.css?v=202611242005">
 </head>
 <body>
 <header id="bar">
@@ -102,6 +102,7 @@
         <option value="high">High (quiet piano)</option>
       </select>
     </label>
+    <label class="sensrow"><input type="checkbox" id="ai" checked> AI listening: a trained model decides which keys you played (takes a moment to load the first time)</label>
     <label class="sensrow"><input type="checkbox" id="sfx" checked> Sound effects</label>
     <label class="sensrow"><input type="checkbox" id="ignoreTalk" checked> Ignore talking (turn off if very short, staccato notes are missed)</label>
     <label class="import" id="importBtn">＋ Add your own song (MIDI file or MP3 recording)
@@ -119,8 +120,9 @@
     <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0). Recordings are turned into notes on this device with Spotify's Basic Pitch (Apache 2.0).</p>
   </div>
 </div>
-<script src="sound.js?v=202611241850"></script>
-<script src="songs.js?v=202611241850"></script>
-<script src="app.js?v=202611241850"></script>
+<script src="listen-ml.js?v=202611242005"></script>
+<script src="sound.js?v=202611242005"></script>
+<script src="songs.js?v=202611242005"></script>
+<script src="app.js?v=202611242005"></script>
 </body>
 </html>
