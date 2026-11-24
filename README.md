@@ -7,6 +7,8 @@ A piano practice app that runs in the browser with no build step: open `index.ht
 - **Listen** – the app plays the song for you.
 - Right hand, left hand or both (the other hand is played for you), adjustable speed.
 - **Listen (microphone)** – turn on 🎤 Listen and play a real piano; the app hears each note and waits for the right one.
+- **Train on my piano** – play each of the 88 keys once; the app learns how every key sounds through this microphone in this room (and the room's background noise), and listens for each key on the bands where it was actually heard. Training is saved in the browser on that device; untrained keys still use the general listener.
+- **Microphone sensitivity** – Low / Normal / High on the song library screen.
 - **Note practice** – a note appears on the staff (treble, bass or both, optional ledger lines and sharps/flats) and you find it on the keyboard.
 - Input: computer keyboard (Z row = C3 octave, Q row = C4 upward), mouse/touch, or a MIDI keyboard.
 

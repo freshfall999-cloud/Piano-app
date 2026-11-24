@@ -18,7 +18,7 @@
   const ui = {
     song: $("song"), mode: $("mode"), hand: $("hand"), speed: $("speed"), speedVal: $("speedVal"),
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
-    streak: $("streak"), mic: $("mic"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
+    streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
   };
 
   const HINT = ui.hint.textContent;
@@ -220,7 +220,7 @@
   }
 
   function press(midi, vel) {
-    if (down.has(midi)) return;
+    if (down.has(midi) || train) return;
     down.add(midi); noteOn(midi, vel);
     if (drill) { drillAnswer(midi); return; }
     if (state !== "running" || mode() === "listen") return;
@@ -354,17 +354,65 @@
   }
 
   // ---------- Microphone listening ----------
-  // Hears a real piano through the mic. Two detectors run together:
-  //  1. Spectrum: for each note the song is waiting for, look for a fresh rise of energy at that
-  //     note's harmonics. Works with chords, pedal and notes still ringing.
-  //  2. Pitch (YIN): names the single clearest note, used for the on-screen meter and as a backup.
-  const mic = {
-    on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, rms: [], lastTrig: 0, level: 0,
-    sal: new Float32Array(128), hist: Array.from({ length: 14 }, () => new Float32Array(128).fill(-200)), hi: 0,
-    armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
+  // How the app hears a real piano:
+  //  * The spectrum is split into one band per piano key (semitone bands up to about 10 kHz).
+  //  * A key counts as struck when the bands where its sound lives jump up together, stand clearly
+  //    above the room's noise, and the jump isn't just a broadband thump.
+  //  * Untrained, a key's sound is assumed to sit in three of its overtones. After "Train on my piano"
+  //    each key listens on the bands where that key was actually heard through this microphone, in
+  //    this room, against the room noise measured during training.
+  //  * Every key is watched all the time, so a note played slightly early still counts, and once one
+  //    note of a chord is heard the rest of the chord needs less evidence.
+  //  * Pitch tracking (YIN) only drives the "Hearing:" readout.
+  const BLO = 21, BHI = 124;                                         // bands A0 .. E9
+  const HARM = [0, 12, 19, 24, 28, 31, 34, 36, 38, 40];               // band offsets of overtones 1..10
+  const SENS = {
+    low:    { gFloor: 20, gRise: 4,   tMargin: 9, tRise: 4,   tSoft: 30 },
+    normal: { gFloor: 16, gRise: 3.5, tMargin: 6, tRise: 3,   tSoft: 40 },
+    high:   { gFloor: 12, gRise: 3,   tMargin: 4, tRise: 2.5, tSoft: 50 },
   };
-  const sameNote = (a, b) => a === b || Math.abs(a - b) === 12;   // forgive octave slips of the pitch detector
-  const LATE = 0.35;                                               // hearing lags the key press a little
+  const LATE = 0.35;                                                  // hearing lags the key press a little
+  const mic = {
+    on: false, analyser: null, stream: null, buf: null, spec: null, note: null, cand: null, count: 0, level: 0, yinAt: 0, bands: [],
+    L: new Float32Array(128).fill(-200), F: new Float32Array(128), live: new Float32Array(128).fill(-200),
+    sal: new Float32Array(130).fill(-200), hist: [],
+    armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
+    onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
+    lowEv: new Uint8Array(128), upTone: new Uint8Array(128), own: new Uint8Array(128), groupHitAt: 0, groupStart: null,
+  };
+  const nm = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
+
+  // training data: per key, the level and jump heard at each overtone band, plus the room's noise per band
+  let calib = null, tmpl = [];
+  function buildTemplates() {
+    tmpl = [];
+    if (!calib) return;
+    for (const k in calib.keys) {
+      const m = +k, t = calib.keys[k], sig = [];
+      HARM.forEach((o, n) => {
+        const b = m + o;
+        if (b > BHI || t.lv[n] == null) return;
+        const w = t.lv[n] - calib.noise[b];
+        if (t.rs[n] >= 6 && w >= 10) sig.push({ b, lv: t.lv[n], w });
+      });
+      sig.sort((x, y) => y.w - x.w);
+      if (sig.length) tmpl[m] = sig.slice(0, 8);
+    }
+  }
+  try { calib = JSON.parse(localStorage.getItem("keyfall:calib")); } catch (e) {}
+  if (!calib || calib.v !== 1 || !calib.keys || !calib.noise) calib = null;
+  buildTemplates();
+  const saveCalib = () => { try { localStorage.setItem("keyfall:calib", JSON.stringify(calib)); } catch (e) {} };
+  const sens = () => SENS[ui.sens.value] || SENS.normal;
+  const noiseAt = b => calib ? Math.max(calib.noise[b], mic.live[b] + 4) : mic.live[b] + 4;
+  const lvl = b => b >= BLO && b <= BHI ? mic.L[b] : -200;
+  // a band holds a real tone (not the splash of a key's attack): it stands out from the bands around it.
+  // Low bands are narrower than the analysis can resolve, so compare them with bands further away.
+  const peaky = (b, d) => {
+    if (b < 33) return true;
+    const g = b >= 60 ? 1 : b >= 45 ? 2 : 3;
+    return lvl(b) >= lvl(b - g) + d && lvl(b) >= lvl(b + g) + d;
+  };
 
   async function toggleMic() {
     if (mic.on) {
@@ -384,6 +432,14 @@
     mic.analyser.connect(mute).connect(ac.destination);
     mic.buf = new Float32Array(mic.analyser.fftSize);
     mic.spec = new Float32Array(mic.analyser.frequencyBinCount);
+    const hz = ac.sampleRate / mic.analyser.fftSize, nb = mic.analyser.frequencyBinCount;
+    for (let k = BLO; k <= BHI; k++) {                 // FFT bins that belong to each key's band (±50 cents)
+      const f = 440 * Math.pow(2, (k - 69) / 12);
+      let i0 = Math.ceil(f * Math.pow(2, -1 / 24) / hz), i1 = Math.floor(f * Math.pow(2, 1 / 24) / hz);
+      if (i1 < i0) i0 = i1 = Math.round(f / hz);
+      mic.bands[k] = [i0, Math.min(i1, nb - 1)];
+    }
+    mic.hist = []; mic.live.fill(-200);
     mic.on = true; ui.mic.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
   }
 
@@ -408,42 +464,36 @@
 
   function micHit(n, perfect) {
     if (drill) drillAnswer(n.midi); else registerHit(n, perfect);
-    mic.armed[n.midi] = 0; mic.peak[n.midi] = mic.sal[n.midi]; mic.hitAt[n.midi] = performance.now();
   }
   function micTargets() {              // notes the song is currently waiting to hear
+    if (train) return [];
     if (drill) return drill.done ? [] : [drill.target];
     if (state !== "running" || mode() === "listen") return [];
     if (mode() === "practice") { const g = nextGroup(); return g.length && g[0].start - time <= 0.35 ? g : []; }
     return song.notes.filter(n => n.state === "pending" && isUser(n) && n.start - time <= HIT_WINDOW && time - n.start <= LATE);
   }
-  const micPerfect = n => mode() === "practice" || Math.abs(n.start - time) <= PERFECT + 0.12;
-
-  function heard(midi) {               // pitch detector: a freshly struck single note
-    mic.lastTrig = performance.now();
-    const n = micTargets().find(n => sameNote(n.midi, midi) && mic.armed[n.midi]);
-    if (n) micHit(n, micPerfect(n));
-  }
+  const micPerfect = (n, ago = 0) => mode() === "practice" || Math.abs(n.start - (time - ago / 1000 * ui.speed.value / 100)) <= PERFECT + 0.12;
 
   function micTick() {
     if (!mic.on) return;
-    const now = performance.now(), sr = ac.sampleRate;
+    const now = performance.now(), sr = ac.sampleRate, S = sens();
     mic.analyser.getFloatTimeDomainData(mic.buf);
     const x = mic.buf.subarray(mic.buf.length - 4096);
     let e = 0;
     for (let i = 0; i < x.length; i++) e += x[i] * x[i];
-    const rms = Math.sqrt(e / x.length);
-    mic.level = rms;
-    mic.rms.push(rms); if (mic.rms.length > 5) mic.rms.shift();
+    const rms = mic.level = Math.sqrt(e / x.length);
 
-    // --- spectrum: how strongly each piano key is sounding (dB), from three of its harmonics
-    const spec = mic.spec, hz = sr / mic.analyser.fftSize, nb = spec.length;
+    // --- band levels (dB) for every key, and a slow estimate of each band's background level
+    const spec = mic.spec, L = mic.L, F = mic.F, live = mic.live, hz = sr / mic.analyser.fftSize, nb = spec.length;
     mic.analyser.getFloatFrequencyData(spec);
-    const sample = [];
-    for (let b = Math.round(200 / hz); b < 4000 / hz && b < nb; b += 4) sample.push(spec[b]);
-    sample.sort((a, b) => a - b);
-    const floor = Math.max(sample[Math.floor(sample.length * 0.3)], -110);
-    const prev = mic.hist[mic.hi]; mic.hi = (mic.hi + 1) % mic.hist.length;
-    prev.set(mic.sal);                                   // oldest slot now holds the previous frame
+    for (let k = BLO; k <= BHI; k++) {
+      const [i0, i1] = mic.bands[k];
+      let pk = -200;
+      for (let i = i0; i <= i1; i++) if (spec[i] > pk) pk = spec[i];
+      L[k] = pk;
+      live[k] = live[k] <= -199 ? pk : live[k] + (pk - live[k]) * (pk < live[k] ? 0.05 : 0.003);
+    }
+    // --- untrained salience: three overtones from 250 Hz up
     for (let m = 21; m <= 108; m++) {
       const f = 440 * Math.pow(2, (m - 69) / 12), h0 = Math.max(1, Math.ceil(250 / f));
       let acc = 0;
@@ -451,34 +501,224 @@
         const b = Math.round(h * f / hz), tol = Math.max(1, Math.round(b * 0.012));
         let pk = -200;
         for (let k = b - tol; k <= b + tol && k < nb; k++) if (spec[k] > pk) pk = spec[k];
-        acc += Math.pow(10, Math.max(pk, -200) / 10);
+        acc += Math.pow(10, pk / 10);
       }
-      const s = mic.sal[m] = 10 * Math.log10(acc / 3 + 1e-20);
-      if (!mic.armed[m]) {                               // re-arm once the note has died down a bit
-        if (s > mic.peak[m]) mic.peak[m] = s;
-        if (s < mic.peak[m] - 3 || now - mic.hitAt[m] > 700) mic.armed[m] = 1;
-      }
+      mic.sal[m] = 10 * Math.log10(acc / 3 + 1e-20);
     }
-    for (const n of micTargets()) {
-      const m = n.midi, s = mic.sal[m];
-      if (!mic.armed[m] || s < floor + 20 || s < -85) continue;
-      if (s < mic.sal[m - 1] + 4 || s < mic.sal[m + 1] + 4) continue;   // must stand out from neighbouring keys
-      let lo = Infinity;
-      for (const h of mic.hist) if (h[m] < lo) lo = h[m];
-      if (s >= lo + 4) micHit(n, micPerfect(n));                          // energy just rose: the key was struck
+    // --- how much each band jumped in the last 0.3 s, minus any jump shared by most bands (a thump)
+    const hist = mic.hist;
+    while (hist.length > 1 && now - hist[0].t > 300) hist.shift();
+    for (let k = BLO; k <= BHI; k++) {
+      let lo = L[k];
+      for (const h of hist) if (h.L[k] < lo) lo = h.L[k];
+      F[k] = L[k] - lo;
     }
+    const sorted = Array.from(F.subarray(40, 111)).sort((a, b) => a - b), base = Math.max(0, sorted[Math.floor(sorted.length * 0.3)]);
+    for (let k = BLO; k <= BHI; k++) F[k] = Math.max(0, F[k] - base);
 
-    // --- pitch detector
-    if (rms < 0.004) { mic.note = mic.cand = null; mic.count = 0; return; }
-    const f = detectPitch(x, sr);
-    const midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
-    if (midi !== null && midi >= 33 && midi <= 105) {
-      if (midi === mic.cand) mic.count++; else { mic.cand = midi; mic.count = 1; }
-      if (mic.count >= 2) {
-        const restruck = rms > mic.rms[0] * 1.5 && now - mic.lastTrig > 120;
-        if (midi !== mic.note || restruck) { mic.note = midi; heard(midi); }
+    if (train) trainTick(now);
+    else {
+      // --- untrained floor: a low percentile of the spectrum between 200 Hz and 4 kHz
+      const sample = [];
+      for (let b = Math.round(200 / hz); b < 4000 / hz && b < nb; b += 4) sample.push(spec[b]);
+      sample.sort((a, b) => a - b);
+      const floor = Math.max(sample[Math.floor(sample.length * 0.3)], -110);
+      // --- decide, for every key, whether it was just struck
+      for (let m = 21; m <= 108; m++) {
+        // untrained check: three overtones from 250 Hz up stand out and just jumped
+        const s = mic.sal[m], level = s;
+        let lo = s;
+        for (const h of hist) if (h.s[m] < lo) lo = h.s[m];
+        let strict = s >= mic.sal[m - 1] + 4 && s >= mic.sal[m + 1] + 4 && s >= floor + S.gFloor && s >= -95 && s - lo >= S.gRise;
+        let soft = s >= mic.sal[m - 1] + 2 && s >= mic.sal[m + 1] + 2 && s >= floor + S.gFloor - 6 && s - lo >= S.gRise * 0.5;
+        // trained check: the bands where this key was heard during training (either check is enough)
+        const t = tmpl[m];
+        if (t && !strict) {
+          let tot = 0, got = 0, gotSoft = 0, n = 0;
+          for (const { b, lv, w } of t) {
+            const nz = noiseAt(b);
+            if (lv < nz + S.tMargin + 3 || n >= 5) continue;   // buried under today's noise: rely on the other overtones
+            n++; tot += w;
+            if (L[b] >= nz + S.tMargin && L[b] >= lv - S.tSoft && F[b] >= S.tRise && peaky(b, 3)) got += w;
+            if (L[b] >= nz + S.tMargin * 0.6 && F[b] >= S.tRise * 0.5 && peaky(b, 1.5)) gotSoft += w;
+          }
+          if (tot) { strict = got >= 0.6 * tot; soft = soft || gotSoft >= 0.5 * tot; }
+        }
+        if (!mic.armed[m]) {                             // a struck key listens again once it fades a little
+          if (level > mic.peak[m]) mic.peak[m] = level;
+          if (level < mic.peak[m] - 3 || now - mic.hitAt[m] > 400) mic.armed[m] = 1;
+        }
+        if (mic.armed[m]) {
+          if (strict) {
+            mic.onsetAt[m] = now; mic.armed[m] = 0; mic.peak[m] = level; mic.hitAt[m] = now;
+            mic.lowEv[m] = mic.upTone[m] = mic.own[m] = 0;
+          } else if (soft) mic.softAt[m] = now;
+        }
+        // wrong octave? A key an octave away shares many of this key's overtones, so watch the ones it doesn't
+        // share during the first 0.2 s after a strike (the attack's splash hides them at first).
+        if (now - mic.onsetAt[m] <= 200) {
+          const lo = m - 12, ref = Math.max(lvl(m), lvl(m + 12), lvl(m + 19), lvl(m + 24));
+          const tone = b => b >= BLO && b <= BHI && F[b] >= 6 && L[b] >= noiseAt(b) + S.tMargin && peaky(b, 4);
+          const there = b => b > BHI || (L[b] >= noiseAt(b) + S.tMargin * 0.6 && peaky(b, 2));
+          const visible = b => b > BHI || noiseAt(b) + 15 < L[m + 12];
+          // octave below: its fundamental and 3rd overtone (which this key lacks) sounded as well
+          if (tone(lo) && tone(m + 7) && L[lo] >= ref - 15 && L[m + 7] >= ref - 25 && mic.lowEv[m] < 9) mic.lowEv[m]++;
+          // octave above: the key above sounded, but this key's own fundamental and 3rd overtone never did
+          if (m >= 36 && tone(m + 12) && visible(m) && visible(m + 19)) mic.upTone[m] = 1;
+          if ((there(m) || there(m + 19)) && mic.own[m] < 9) mic.own[m]++;   // seen over several frames, not a flicker
+        }
+      }
+      // --- match what was heard to the notes the song is waiting for
+      const targets = micTargets();
+      if (targets.length) {
+        const keep = drill || mode() === "practice" ? 700 : 250;
+        // every note of the chord being played, including ones already heard, so C3 + C4 isn't mistaken for a lone C3
+        const t0 = Math.min(...targets.map(n => n.start)), t1 = Math.max(...targets.map(n => n.start));
+        const want = new Set(drill ? [drill.target.midi] : song.notes.filter(n => isUser(n) && n.start >= t0 - 1e-6 && n.start <= t1 + 1e-6).map(n => n.midi));
+        const take = (n, from) => {
+          const m = n.midi;
+          mic.usedAt[m] = from;
+          if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] < 3 && !want.has(m + 12))) return;   // wrong octave
+          micHit(n, micPerfect(n, now - from)); mic.groupHitAt = now; mic.groupStart = n.start;
+        };
+        for (const n of targets) {
+          const m = n.midi;
+          const age = now - mic.onsetAt[m];
+          if (mic.onsetAt[m] > mic.usedAt[m] && age >= 120 && age <= keep + 120) take(n, mic.onsetAt[m]);
+        }
+        // the rest of a chord that was just heard: weaker evidence is enough for its other notes
+        if (!drill && now - mic.groupHitAt <= keep) for (const n of micTargets()) {
+          const m = n.midi;
+          if (n.state !== "hit" && n.start === mic.groupStart && mic.softAt[m] > mic.usedAt[m] && now - mic.softAt[m] <= keep) {
+            mic.lowEv[m] = mic.upTone[m] = 0;
+            take(n, mic.softAt[m]);
+          }
+        }
       }
     }
+    hist.push({ t: now, L: L.slice(), s: mic.sal.slice() });
+
+    // --- pitch readout
+    if (rms < 0.003) { mic.note = mic.cand = null; mic.count = 0; return; }
+    if (now - mic.yinAt < 50) return;
+    mic.yinAt = now;
+    const f = detectPitch(x, sr), midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
+    if (midi !== null && midi >= 21 && midi <= 108) {
+      if (midi === mic.cand) mic.count++; else { mic.cand = midi; mic.count = 1; }
+      if (mic.count >= 2) mic.note = midi;
+    }
+  }
+
+  // ---------- Train on my piano: learn how every key sounds through this microphone ----------
+  let train = null;
+  async function startTraining() {
+    if (!mic.on) await toggleMic();
+    if (!mic.on) { $("trainStatus").textContent = "The microphone is needed for training. Allow it when Safari asks, then try again."; return; }
+    if (state === "running") pause();
+    train = { phase: "noise", t0: performance.now(), frames: [], i: 0, cap: null, rejects: 0, wait: 0, msg: "", okAt: 0, keys: [], log: [],
+      data: { v: 1, noise: [], keys: Object.assign({}, calib ? calib.keys : {}), date: Date.now() } };
+    for (let m = 21; m <= 108; m++) train.keys.push(m);
+    LOW = 21; HIGH = 108; layout();
+    $("home").hidden = true; $("bar").classList.add("train"); $("title").textContent = "Train on my piano"; ui.hint.hidden = true;
+  }
+  function trainTick(now) {
+    const T = train, L = mic.L, F = mic.F;
+    if (T.phase === "noise") {                          // 2 seconds of the room's own sound
+      T.frames.push(L.slice());
+      if (now - T.t0 >= 2000 && T.frames.length >= 10) {
+        const noise = new Array(128).fill(-200);
+        for (let k = BLO; k <= BHI; k++) {
+          const v = T.frames.map(f => f[k]).sort((a, b) => a - b);
+          noise[k] = Math.round(v[Math.floor(v.length * 0.9)] * 10) / 10;
+        }
+        T.data.noise = noise; T.phase = "keys"; T.frames = null; T.wait = now + 200;
+      }
+      return;
+    }
+    if (T.phase !== "keys" || now < T.wait) return;
+    const m = T.keys[T.i], nz = T.data.noise;
+    if (!T.cap) {                                       // wait for a strike: this key's bands jump, or several bands jump at once
+      const jump = k => F[k] >= 8 && L[k] >= nz[k] + 8 && peaky(k, 3);
+      let many = 0;
+      for (let k = BLO; k <= BHI; k++) if (jump(k)) many++;
+      if (!HARM.some(o => m + o <= BHI && jump(m + o)) && many < 4) return;
+      T.cap = { t0: now, lv: HARM.map(() => -200), rs: HARM.map(() => 0), top: HARM.map(() => -200), lowL: -200 };
+    }
+    // jumps over the next 0.3 s; levels only once the attack's splash has left the analysis window
+    const c = T.cap, settled = now - c.t0 >= 170;
+    HARM.forEach((o, n) => {
+      const b = m + o;
+      if (b > BHI) return;
+      c.rs[n] = Math.max(c.rs[n], F[b]);
+      if (settled) c.lv[n] = Math.max(c.lv[n], L[b]);
+    });
+    if (settled) {
+      for (let k = BLO; k <= BHI; k++) c.top[k] = Math.max(c.top[k] ?? -200, L[k] - nz[k]);
+      if (m - 12 >= BLO) c.lowL = Math.max(c.lowL, L[m - 12]);
+    }
+    if (now - c.t0 < 300) return;
+    T.cap = null; T.wait = now + 250;
+    // was it this key? (its loudest band should be one of its overtones; low bands blur into their neighbours)
+    const bands = [0, 12, 19, 24, 28, 31, 34, 36, 38, 40, 42, 43, 44, 46, 47, 48].map(o => m + o).filter(b => b <= BHI);
+    let best = BLO;
+    for (let k = BLO; k <= BHI; k++) if (c.top[k] > c.top[best]) best = k;
+    const strongest = Math.max(...c.lv);
+    const loud = HARM.some((o, n) => m + o <= BHI && c.rs[n] >= 6 && c.lv[n] >= nz[m + o] + 8);
+    const near = best < 57 ? bands.some(b => Math.abs(b - best) <= 1) : bands.includes(best);
+    const odd = Math.max(...[0, 2, 4].filter(n => m + HARM[n] <= BHI).map(n => c.lv[n])) >= strongest - 25;
+    const lower = m - 12 >= BLO && c.lowL >= strongest - 12;
+    const problem = !loud ? "quiet" : !near ? "other" : !odd ? "high" : lower ? "low" : "";
+    if (problem) T.log.push(nm(m) + ":" + problem);
+    if (problem && (problem === "quiet" || T.rejects < 2)) {
+      T.rejects++;
+      T.msg = { quiet: T.rejects >= 3 ? `Still too quiet. Play ${nm(m)} louder, move the iPad closer, or tap Skip key.` : `That was too quiet to learn from. Play ${nm(m)} a little harder.`,
+        other: `That sounded like a different key. Play ${nm(m)}.`,
+        high: `That sounded like a higher ${NAMES[m % 12]}. Play ${nm(m)}.`,
+        low: `That sounded like a lower ${NAMES[m % 12]}. Play ${nm(m)}.` }[problem];
+      return;
+    }
+    T.data.keys[m] = { lv: c.lv.map(v => Math.round(v * 10) / 10), rs: c.rs.map(v => Math.round(v * 10) / 10) };
+    T.msg = problem ? "Saved it anyway. If that was the wrong key, tap Back one key." : "";
+    T.okAt = now; T.rejects = 0;
+    calib = T.data; saveCalib(); buildTemplates();     // keep progress even if training stops halfway
+    if (++T.i >= T.keys.length) finishTraining();
+  }
+  function finishTraining() {
+    const T = train;
+    if (!T) return;
+    train = null;
+    if (T.phase === "keys") { calib = T.data; saveCalib(); buildTemplates(); }
+    $("bar").classList.remove("train");
+    showHome();
+  }
+  function drawTraining() {
+    const T = train, cx = W / 2, now = performance.now();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#2c3042"; ctx.fillRect(0, 0, W, 4);
+    ctx.fillStyle = "#5fd38a"; ctx.fillRect(0, 0, W * T.i / T.keys.length, 4);
+    const y = Math.max(70, kbTop * 0.32);
+    if (!mic.on) {
+      ctx.font = "600 22px system-ui, sans-serif"; ctx.fillStyle = "#ffc14d";
+      ctx.fillText("The microphone is off. Tap 🎤 Listen to continue.", cx, y);
+      return;
+    }
+    if (T.phase === "noise") {
+      ctx.font = "700 30px system-ui, sans-serif"; ctx.fillStyle = "#e8eaf2";
+      ctx.fillText("Stay quiet for a moment…", cx, y);
+      ctx.font = "16px system-ui, sans-serif"; ctx.fillStyle = "#a3a8bd";
+      ctx.fillText("Listening to your room's background sound", cx, y + 32);
+      return;
+    }
+    const m = T.keys[T.i];
+    ctx.font = "600 13px system-ui, sans-serif"; ctx.fillStyle = "#a3a8bd";
+    ctx.fillText(`KEY ${T.i + 1} OF ${T.keys.length}`, cx, y - 46);
+    ctx.font = "800 64px system-ui, sans-serif"; ctx.fillStyle = "#ffffff";
+    ctx.fillText(nm(m), cx, y + 16);
+    ctx.font = "17px system-ui, sans-serif"; ctx.fillStyle = "#cfd3e6";
+    ctx.fillText("Play the green key once, firmly, and let it ring.", cx, y + 52);
+    ctx.font = "600 17px system-ui, sans-serif";
+    if (T.msg) { ctx.fillStyle = "#ffc14d"; ctx.fillText(T.msg, cx, y + 84); }
+    else if (now - T.okAt < 700) { ctx.fillStyle = "#5fd38a"; ctx.fillText("Got it ✓  " + nm(T.keys[T.i - 1] ?? m), cx, y + 84); }
   }
 
   // ---------- Layout & drawing ----------
@@ -518,7 +758,7 @@
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
     // falling notes
-    if (song && !drill) {
+    if (song && !drill && !train) {
       const pps = kbTop / LOOKAHEAD;
       for (const n of song.notes) {
         if (n.start - time > LOOKAHEAD) break;
@@ -541,13 +781,16 @@
       if (n.start - time < 0.01) target.add(n.midi);
     });
     if (drill && drill.tries >= 2 && !drill.done) target.add(drill.target.midi);
-    const lab = drill ? (ui.dNames.checked ? "notes" : "off") : ui.labels.value;
+    if (train && train.phase === "keys") target.add(train.keys[train.i]);
+    const lab = train ? "notes" : drill ? (ui.dNames.checked ? "notes" : "off") : ui.labels.value;
     const badKey = drill && drill.wrongKey !== null && performance.now() - drill.wrongAt < 450 ? drill.wrongKey : -1;
     ctx.textAlign = "center";
     for (const pass of [false, true]) for (const k of keys) {
       if (k.black !== pass) continue;
       const on = down.has(k.midi) || autoDown.has(k.midi) || mic.note === k.midi;
-      ctx.fillStyle = k.midi === badKey ? "#ff6b7d" : on ? "#39b6ff" : target.has(k.midi) ? (pass ? "#2e7d4f" : "#a8f0c0") : pass ? "#181a22" : "#f4f5f9";
+      const learned = train && train.data.keys[k.midi];
+      ctx.fillStyle = k.midi === badKey ? "#ff6b7d" : target.has(k.midi) ? (pass ? "#2e7d4f" : "#a8f0c0") : on ? "#39b6ff"
+        : learned ? (pass ? "#34507a" : "#cfe2fb") : pass ? "#181a22" : "#f4f5f9";
       rrect(k.x + (pass ? 0 : 1), kbTop, k.w - (pass ? 0 : 2), k.h - 2, 4); ctx.fill();
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
@@ -557,6 +800,7 @@
       ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10);
     }
     if (drill) drawStaff();
+    if (train) drawTraining();
     // hit feedback
     const now = performance.now();
     ctx.font = "bold 13px system-ui, sans-serif";
@@ -580,7 +824,7 @@
       ctx.textAlign = "center";
     }
     // countdown / progress
-    if (song && state !== "idle") {
+    if (song && state !== "idle" && !train) {
       if (time < 0 && state === "running") {
         ctx.font = "bold 64px system-ui, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.25)";
         ctx.fillText(Math.ceil(-time), W / 2, kbTop / 2);
@@ -601,7 +845,7 @@
   // ---------- Input ----------
   window.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey || /^(SELECT|INPUT)$/.test(e.target.tagName) && e.key !== " ") return;
-    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden && !drill) toggle(); return; }
+    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden && !drill && !train) toggle(); return; }
     const m = KEYMAP[e.key.toLowerCase()];
     if (m === undefined) return;
     e.preventDefault();
@@ -674,7 +918,10 @@
 
   // ---------- Song library screen ----------
   function showHome() {
+    if (train) { finishTraining(); return; }
     if (state === "running") pause();
+    const learned = calib ? Object.keys(calib.keys).length : 0;
+    $("trainStatus").textContent = learned ? `Trained on ${learned} of 88 keys. Tap to train again.` : "Play each key once so the microphone learns how your piano sounds.";
     if (drill) { drill = null; $("bar").classList.remove("drill"); ui.hint.textContent = HINT; songChanged(); }
     const list = $("list");
     list.textContent = "";
@@ -705,6 +952,16 @@
   }
   $("back").onclick = showHome;
   $("drillBtn").onclick = startDrill;
+  $("trainBtn").onclick = startTraining;
+  $("tDone").onclick = finishTraining;
+  $("tSkip").onclick = () => { const T = train; if (!T || T.phase !== "keys") return; T.cap = null; T.msg = ""; T.rejects = 0; if (++T.i >= T.keys.length) finishTraining(); };
+  $("tBack").onclick = () => {
+    const T = train; if (!T || T.phase !== "keys" || !T.i) return;
+    T.i--; delete T.data.keys[T.keys[T.i]]; T.cap = null; T.msg = ""; T.rejects = 0; T.okAt = 0;
+    calib = T.data; saveCalib(); buildTemplates();
+  };
+  try { const v = localStorage.getItem("keyfall:sens"); if (SENS[v]) ui.sens.value = v; } catch (e) {}
+  ui.sens.onchange = () => { try { localStorage.setItem("keyfall:sens", ui.sens.value); } catch (e) {} };
   ui.dClef.onchange = ui.dLedger.onchange = ui.dAcc.onchange = () => { if (drill) nextDrill(); };
   $("file").onchange = async ev => {
     const f = ev.target.files[0], msg = $("importMsg");
@@ -732,5 +989,5 @@
   layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 
-  window.__keyfall = { mic, get drill() { return drill; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { mic, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
 })();

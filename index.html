@@ -45,6 +45,9 @@
   <label class="drillonly"><input type="checkbox" id="dLedger"> Ledger lines</label>
   <label class="drillonly"><input type="checkbox" id="dAcc"> Sharps &amp; flats</label>
   <label class="drillonly"><input type="checkbox" id="dNames"> Show key names</label>
+  <button id="tBack" class="trainonly">Back one key</button>
+  <button id="tSkip" class="trainonly">Skip key</button>
+  <button id="tDone" class="trainonly primary">Finish</button>
   <button id="mic" title="Listen to a real piano through the microphone">🎤 Listen: off</button>
   <button id="start" class="primary songonly">Start</button>
   <button id="restart" class="songonly">Restart</button>
@@ -73,10 +76,23 @@
   <div class="inner">
     <div class="brand">Keyfall</div>
     <p class="sub">Choose a song to practice</p>
-    <button id="drillBtn" class="drillcard">
-      <span class="t">🎼 Note practice</span>
-      <span class="by">A note appears on the staff — find it and play it</span>
-    </button>
+    <div class="cards">
+      <button id="drillBtn" class="drillcard">
+        <span class="t">🎼 Note practice</span>
+        <span class="by">A note appears on the staff — find it and play it</span>
+      </button>
+      <button id="trainBtn" class="drillcard traincard">
+        <span class="t">🎙 Train on my piano</span>
+        <span class="by" id="trainStatus">Play each key once so the microphone learns how your piano sounds.</span>
+      </button>
+    </div>
+    <label class="sensrow">Microphone sensitivity
+      <select id="sens">
+        <option value="low">Low (noisy room)</option>
+        <option value="normal" selected>Normal</option>
+        <option value="high">High (quiet piano)</option>
+      </select>
+    </label>
     <label class="import">＋ Add your own song (MIDI file)
       <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
     </label>
