@@ -18,4 +18,6 @@ The song library screen lists the built-in songs by difficulty and shows your be
 
 Third-party files: piano samples in `samples/` (Salamander Grand Piano, CC BY 3.0, see `samples/CREDITS.md`); `vendor/basic-pitch/` (Basic Pitch model and code, Apache 2.0) and `vendor/tf.min.js` (TensorFlow.js 3.21, Apache 2.0).
 
+When releasing an update, run `./bump-version.sh` so browsers fetch the new code instead of a cached copy.
+
 Built-in songs live in `songs.js` as simple note strings and are all public-domain melodies.

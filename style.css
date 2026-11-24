@@ -163,3 +163,5 @@ button.primary:hover { background: linear-gradient(#63c0ff, #2b86e0); }
 .import.busy { opacity: .6; pointer-events: none; }
 .import.busy::after { content: ""; width: 14px; height: 14px; margin-left: 8px; border: 2px solid #7fd4ff; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.song.mysongs { padding-right: 40px; }
+.song .t { overflow-wrap: anywhere; }

@@ -180,7 +180,7 @@
     return out;
   }
   const saveImported = () => { try { localStorage.setItem("keyfall:imported", JSON.stringify(SONGS.filter(s => s.notes))); } catch (e) {} };
-  try { SONGS.push(...(JSON.parse(localStorage.getItem("keyfall:imported")) || [])); } catch (e) {}
+  try { SONGS.push(...(JSON.parse(localStorage.getItem("keyfall:imported")) || []).map(s => ({ ...s, title: s.title.replace(/_+/g, " ").replace(/\s+/g, " ").trim() }))); } catch (e) {}
 
   // ---------- Game state ----------
   let song = null, state = "idle";      // idle | running | paused | done
@@ -1290,8 +1290,9 @@
     const f = ev.target.files[0], msg = $("importMsg");
     ev.target.value = "";
     if (!f) return;
-    const isMidi = /\.midi?$/i.test(f.name) || /midi/.test(f.type);
-    const title = f.name.replace(/\.[^.]+$/, "").slice(0, 60);
+    const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+    const isMidi = String.fromCharCode(...head) === "MThd";          // what's in the file, not what it's called
+    const title = f.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "My song";
     try {
       let notes;
       if (isMidi) notes = parseMidi(await f.arrayBuffer());
