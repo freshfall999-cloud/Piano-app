@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Keyfall best-quality note finder</title>
+<!-- Google Magenta's Onsets and Frames piano transcription (Apache 2.0), kept apart from the rest of the app -->
+<script src="vendor/magenta/magentamusic.js"></script>
+<script>
+  let model = null, loading = null;
+  window.ready = () => loading || (loading = (async () => { const m = new mm.OnsetsAndFrames("vendor/magenta/onsets_frames/"); await m.initialize(); model = m; })());
+  window.transcribe = async (samples, rate) => {
+    await window.ready();
+    const ctx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, samples.length, rate);
+    const buf = ctx.createBuffer(1, samples.length, rate);
+    buf.getChannelData(0).set(samples);
+    const ns = await model.transcribeFromAudioBuffer(buf);
+    return ns.notes.map(n => ({ pitch: n.pitch, start: n.startTime || 0, end: n.endTime || 0, velocity: n.velocity || 80 }));
+  };
+</script>

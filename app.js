@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), level: $("level"), view: $("view"), ai: $("ai"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), ai: $("ai"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -1564,6 +1564,46 @@
       if (pr && pr.then) pr.then(ok, () => fail(new Error("decode")));
     });
     if (decoded.duration > 12 * 60) throw new Error("That recording is longer than 12 minutes. Try a shorter one.");
+    let kept = null;
+    if (ui.finder.value === "best") {
+      try { kept = await bestNotes(decoded, progress); }
+      catch (e) { console.warn("best-quality finder failed:", e); progress("The best-quality finder didn't work on this device; using the standard one…"); }
+    }
+    if (!kept) kept = await standardNotes(decoded, progress);
+    if (!kept.length) throw new Error("No piano notes were found in that recording.");
+    assignHands(kept);
+    const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp));
+    return kept.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left, Math.round(n.amp / loud * 100) / 100]);
+  }
+  // Google Magenta's Onsets and Frames: made only for piano, the most accurate on our test recordings (99% of notes,
+  // almost no extra ones) but slower, and a 60 MB download the first time
+  // It runs in a hidden frame of its own: it brings an older TensorFlow.js that must not mix with the one used here.
+  let oafFrame = null;
+  function bestFrame() {
+    if (oafFrame) return oafFrame;
+    oafFrame = new Promise((ok, fail) => {
+      const f = document.createElement("iframe");
+      f.hidden = true; f.src = "oaf.html?v=1";
+      f.onload = () => f.contentWindow.ready ? ok(f.contentWindow) : fail(new Error("frame"));
+      f.onerror = () => fail(new Error("frame"));
+      document.body.append(f);
+    });
+    oafFrame.catch(() => { oafFrame = null; });
+    return oafFrame;
+  }
+  async function bestNotes(decoded, progress) {
+    progress("Downloading the best-quality note finder (60 MB, only the first time)…");
+    const w = await bestFrame();
+    await w.ready();
+    const t0 = performance.now();
+    const tick = setInterval(() => progress(`Finding every note with the best-quality finder… ${Math.round((performance.now() - t0) / 1000)} s (a few minutes for a long song)`), 1000);
+    let notes;
+    try { notes = await w.transcribe(decoded.getChannelData(0).slice(), decoded.sampleRate); } finally { clearInterval(tick); }
+    return notes.filter(n => n.pitch >= 21 && n.pitch <= 108 && n.end - n.start >= 0.03)
+      .map(n => ({ midi: n.pitch, start: n.start, end: n.end, amp: n.velocity / 127 }))
+      .sort((a, b) => a.start - b.start || a.midi - b.midi);
+  }
+  async function standardNotes(decoded, progress) {
     // the model listens at 22,050 samples a second, in mono
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const off = new OAC(1, Math.ceil(decoded.duration * 22050), 22050), src = off.createBufferSource();
@@ -1580,7 +1620,7 @@
     // keep real piano notes: very short blips and very quiet echoes go, and a key "struck" twice within 80 ms is one strike.
     // (The thresholds above already split notes only at real strikes, so repeated notes stay separate.)
     const loud = Math.max(...found.map(n => n.amplitude), 0);
-    const kept = [], lastOf = {};
+    const kept = [], lastOf = {};       // (Basic Pitch)
     for (const n of found.filter(n => n.pitchMidi >= 21 && n.pitchMidi <= 108 && n.durationSeconds >= 0.06 && n.amplitude >= loud * 0.12)
       .sort((x, y) => x.startTimeSeconds - y.startTimeSeconds)) {
       const prev = lastOf[n.pitchMidi], s0 = n.startTimeSeconds, s1 = s0 + n.durationSeconds;
@@ -1588,10 +1628,7 @@
       const k = { midi: n.pitchMidi, start: s0, end: s1, amp: n.amplitude };
       kept.push(k); lastOf[n.pitchMidi] = k;
     }
-    if (!kept.length) throw new Error("No piano notes were found in that recording.");
-    assignHands(kept);
-    const t0 = kept[0].start;
-    return kept.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left, Math.round(n.amp / loud * 100) / 100]);
+    return kept;
   }
 
   $("file").onchange = async ev => {
@@ -1629,6 +1666,8 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
+  try { if (localStorage.getItem("keyfall:finder") === "best") ui.finder.value = "best"; } catch (e) {}
+  ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} };
   try { if (localStorage.getItem("keyfall:ai") === "0") ui.ai.checked = false; } catch (e) {}
   ui.ai.onchange = () => { try { localStorage.setItem("keyfall:ai", ui.ai.checked ? "1" : "0"); } catch (e) {} };
   ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };
