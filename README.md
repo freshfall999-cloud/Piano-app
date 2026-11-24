@@ -9,4 +9,6 @@ A piano practice app that runs in the browser with no build step: open `index.ht
 - **Listen (microphone)** – turn on 🎤 Listen and play a real piano; the app hears each note and waits for the right one.
 - Input: computer keyboard (Z row = C3 octave, Q row = C4 upward), mouse/touch, or a MIDI keyboard.
 
-Songs live in `songs.js` as simple note strings and are all public-domain melodies.
+The song library screen lists the built-in songs by difficulty and shows your best star rating. **Add your own song** imports any `.mid` file (kept in the browser on that device).
+
+Built-in songs live in `songs.js` as simple note strings and are all public-domain melodies.

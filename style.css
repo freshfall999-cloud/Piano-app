@@ -10,7 +10,7 @@ header {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
   padding: 8px 14px; background: #1b1e2a; border-bottom: 1px solid #2c3042;
 }
-h1 { font-size: 18px; margin: 0 6px 0 0; letter-spacing: .5px; color: #7fd4ff; }
+h1 { font-size: 17px; margin: 0 6px 0 0; color: #fff; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 label { display: flex; align-items: center; gap: 6px; color: #a3a8bd; }
 select, button, input { font: inherit; }
 select, button {
@@ -46,3 +46,39 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 #stars .off { color: #3a3f56; }
 #resBest { color: #a3a8bd; }
 .card button { margin: 4px; }
+
+#home {
+  position: fixed; inset: 0; z-index: 5; overflow-y: auto; touch-action: pan-y;
+  background: radial-gradient(1200px 500px at 50% -10%, #23355a 0%, #12141c 60%);
+}
+#home[hidden] { display: none; }
+#home .inner {
+  max-width: 980px; margin: 0 auto;
+  padding: calc(28px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(safe-area-inset-left, 0px));
+}
+.brand { font-size: 40px; font-weight: 800; letter-spacing: 1px; color: #7fd4ff; }
+.sub { margin: 2px 0 10px; color: #a3a8bd; font-size: 16px; }
+#list h2 { margin: 22px 0 10px; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #a3a8bd; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.song {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  padding: 14px 16px; border-radius: 12px; border: 1px solid #333a52; border-left-width: 5px; background: #1d2130; min-width: 0;
+}
+.song:hover, .song:active { background: #272c40; }
+.song.easy { border-left-color: #5fd38a; }
+.song.medium { border-left-color: #ffc14d; }
+.song.hard { border-left-color: #ff6b7d; }
+.song .t { font-size: 16px; font-weight: 600; color: #fff; }
+.song .by { color: #a3a8bd; font-size: 13px; }
+.song .st { font-size: 18px; letter-spacing: 3px; color: #3a3f56; }
+.song .st i { font-style: normal; }
+.song .st .on { color: #ffcc4d; }
+.song.mysongs { border-left-color: #7fd4ff; }
+.song { position: relative; }
+.song .del { position: absolute; top: 6px; right: 6px; padding: 6px 10px; color: #a3a8bd; font-size: 15px; }
+.song .del:hover { color: #ff8e9b; }
+.import {
+  display: inline-flex; margin-top: 6px; padding: 9px 14px; border-radius: 8px; cursor: pointer;
+  background: #262a3a; border: 1px dashed #56607f; color: #e8eaf2;
+}
+#importMsg { margin-left: 10px; color: #a3a8bd; }

@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const LOW = 48, HIGH = 84;            // C3..C6
+  let LOW = 48, HIGH = 84;            // C3..C6
   const LOOKAHEAD = 2.6;                // seconds of music visible above the hit line
   const HIT_WINDOW = 0.22, PERFECT = 0.08;
   const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -76,23 +76,96 @@
     return n + 12 * (+m[3] + 1);
   }
   function parseTrack(str, hand, beat, out) {
-    let t = 0;
+    let t = 0, lastTok = [];
     for (const tok of (str || "").split(/\s+/)) {
       if (!tok || tok === "|") continue;
       const [names, d] = tok.split(":");
       const dur = (d ? parseFloat(d) : 1) * beat;
-      if (names !== "R") for (const n of names.split("+"))
-        out.push({ midi: toMidi(n), start: t, dur, hand, state: "pending", played: false });
+      if (names === "~") lastTok.forEach(n => n.dur += dur);       // tie: lengthen the previous notes
+      else {
+        lastTok = [];
+        if (names !== "R") for (const n of names.split("+")) {
+          const note = { midi: toMidi(n), start: t, dur, hand, state: "pending", played: false };
+          lastTok.push(note); out.push(note);
+        }
+      }
       t += dur;
     }
     return t;
   }
   function loadSong(def) {
     const notes = [], beat = 60 / def.bpm;
-    const end = Math.max(parseTrack(def.right, "right", beat, notes), parseTrack(def.left, "left", beat, notes));
+    let end;
+    if (def.notes) {                     // imported song: [midi, start, duration, isLeft]
+      for (const [midi, start, dur, left] of def.notes)
+        notes.push({ midi, start, dur, hand: left ? "left" : "right", state: "pending", played: false });
+      end = Math.max(...notes.map(n => n.start + n.dur));
+    } else end = Math.max(parseTrack(def.right, "right", beat, notes), parseTrack(def.left, "left", beat, notes));
     notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
-    return { def, notes, end };
+    // if both hands strike the same key at the same moment, keep one note
+    const uniq = notes.filter((n, i) => !(i && notes[i - 1].midi === n.midi && Math.abs(notes[i - 1].start - n.start) < 1e-6));
+    return { def, notes: uniq, end };
   }
+
+  // ---------- MIDI file import ----------
+  function parseMidi(buf) {
+    const d = new DataView(buf);
+    let p = 0;
+    const str = n => { let s = ""; for (let i = 0; i < n; i++) s += String.fromCharCode(d.getUint8(p++)); return s; };
+    const vlq = () => { let v = 0, b; do { b = d.getUint8(p++); v = (v << 7) | (b & 127); } while (b & 128); return v; };
+    if (str(4) !== "MThd") throw new Error("That is not a MIDI file.");
+    const hl = d.getUint32(p); p += 4;
+    const ntr = d.getUint16(p + 2), div = d.getUint16(p + 4); p += hl;
+    if (div & 0x8000) throw new Error("This MIDI file uses a timing format that isn't supported.");
+    const tempos = [], tracks = [];
+    for (let t = 0; t < ntr && p < d.byteLength; t++) {
+      const id = str(4), len = d.getUint32(p); p += 4;
+      const end = p + len;
+      if (id !== "MTrk") { p = end; continue; }
+      let tick = 0, status = 0;
+      const open = {}, notes = [];
+      while (p < end) {
+        tick += vlq();
+        if (d.getUint8(p) & 0x80) status = d.getUint8(p++);
+        if (status === 0xff) {
+          const type = d.getUint8(p++), l = vlq();
+          if (type === 0x51) tempos.push([tick, (d.getUint8(p) << 16) | (d.getUint8(p + 1) << 8) | d.getUint8(p + 2)]);
+          p += l;
+        } else if (status === 0xf0 || status === 0xf7) { const l = vlq(); p += l; }
+        else {
+          const cmd = status & 0xf0, ch = status & 15, a = d.getUint8(p++);
+          const b = cmd === 0xc0 || cmd === 0xd0 ? 0 : d.getUint8(p++);
+          if (ch === 9) continue;                                   // drums
+          if (cmd === 0x90 && b > 0) (open[a] = open[a] || []).push(tick);
+          else if (cmd === 0x80 || cmd === 0x90) {
+            const s = open[a] && open[a].shift();
+            if (s !== undefined && a >= 21 && a <= 108) notes.push({ midi: a, t0: s, t1: tick });
+          }
+        }
+      }
+      p = end;
+      if (notes.length) tracks.push(notes);
+    }
+    if (!tracks.length) throw new Error("No notes found in that file.");
+    tempos.sort((a, b) => a[0] - b[0]);
+    const segs = [{ tick: 0, sec: 0, us: 500000 }];
+    for (const [tick, us] of tempos) {
+      const l = segs[segs.length - 1];
+      segs.push({ tick, sec: l.sec + (tick - l.tick) * l.us / div / 1e6, us });
+    }
+    const sec = tick => { let g = segs[0]; for (const x of segs) { if (x.tick > tick) break; g = x; } return g.sec + (tick - g.tick) * g.us / div / 1e6; };
+    // hands: the track with the highest average pitch is the right hand; one track is split at middle C
+    const avg = tr => tr.reduce((a, n) => a + n.midi, 0) / tr.length;
+    const top = tracks.reduce((a, b) => avg(b) > avg(a) ? b : a);
+    const out = [];
+    for (const tr of tracks) for (const n of tr)
+      out.push([n.midi, sec(n.t0), Math.max(sec(n.t1) - sec(n.t0), 0.05), tracks.length > 1 ? +(tr !== top) : +(n.midi < 60)]);
+    const t0 = Math.min(...out.map(n => n[1]));
+    out.forEach(n => { n[1] = Math.round((n[1] - t0) * 1000) / 1000; n[2] = Math.round(n[2] * 1000) / 1000; });
+    return out;
+  }
+  const saveImported = () => { try { localStorage.setItem("keyfall:imported", JSON.stringify(SONGS.filter(s => s.notes))); } catch (e) {} };
+  try { SONGS.push(...(JSON.parse(localStorage.getItem("keyfall:imported")) || [])); } catch (e) {}
 
   // ---------- Game state ----------
   let song = null, state = "idle";      // idle | running | paused | done
@@ -104,6 +177,10 @@
 
   function reset() {
     song = loadSong(SONGS[ui.song.value]);
+    // fit the on-screen keyboard to the song (never smaller than C3..C6)
+    const lo = Math.min(...song.notes.map(n => n.midi)), hi = Math.max(...song.notes.map(n => n.midi));
+    LOW = Math.min(48, Math.floor(lo / 12) * 12); HIGH = Math.max(84, Math.ceil(hi / 12) * 12);
+    layout();
     time = -2; score = streak = bestStreak = hits = perfects = misses = wrong = 0;
     autoDown.forEach((_, m) => noteOff(m)); autoDown.clear();
     state = "idle"; ui.start.textContent = "Start"; ui.results.hidden = true;
@@ -189,6 +266,7 @@
     const key = `keyfall:${song.def.title}:${mode()}:${ui.hand.value}`;
     let best = 0;
     try { best = +localStorage.getItem(key) || 0; if (score > best) localStorage.setItem(key, score); } catch (e) {}
+    try { const k = "keyfall:stars:" + song.def.title; if (stars > (+localStorage.getItem(k) || 0)) localStorage.setItem(k, stars); } catch (e) {}
     $("resTitle").textContent = song.def.title;
     $("stars").innerHTML = [0, 1, 2].map(i => `<span class="${i < stars ? "" : "off"}">★</span>`).join("");
     $("resBody").textContent = mode() === "play"
@@ -223,7 +301,7 @@
   }
 
   function detectPitch(x, sr) {
-    const maxLag = Math.floor(sr / 110), minLag = Math.floor(sr / 2200), W = x.length - maxLag;
+    const maxLag = Math.floor(sr / 62), minLag = Math.floor(sr / 2200), W = x.length - maxLag;
     const d = new Float32Array(maxLag + 1);
     let run = 0, tau = -1;
     for (let lag = 1; lag <= maxLag; lag++) {
@@ -259,7 +337,7 @@
   function micTick() {
     if (!mic.on) return;
     mic.analyser.getFloatTimeDomainData(mic.buf);
-    const x = mic.buf.subarray(mic.buf.length - 2048);
+    const x = mic.buf.subarray(mic.buf.length - 4096);
     let e = 0;
     for (let i = 0; i < x.length; i++) e += x[i] * x[i];
     const rms = Math.sqrt(e / x.length);
@@ -267,7 +345,7 @@
     if (rms < 0.008) { mic.note = mic.cand = null; mic.count = 0; return; }
     const f = detectPitch(x, ac.sampleRate);
     const midi = f ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
-    if (midi !== null && midi >= 40 && midi <= 100) {
+    if (midi !== null && midi >= 33 && midi <= 105) {
       if (midi === mic.cand) mic.count++; else { mic.cand = midi; mic.count = 1; }
       if (mic.count >= 2) {
         const restruck = rms > mic.rms[0] * 1.5 && performance.now() - mic.lastTrig > 120;
@@ -399,7 +477,7 @@
   // ---------- Input ----------
   window.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey || /^(SELECT|INPUT)$/.test(e.target.tagName) && e.key !== " ") return;
-    if (e.key === " ") { e.preventDefault(); if (!e.repeat) toggle(); return; }
+    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden) toggle(); return; }
     const m = KEYMAP[e.key.toLowerCase()];
     if (m === undefined) return;
     e.preventDefault();
@@ -459,26 +537,72 @@
   } else ui.midi.textContent = "MIDI: unsupported";
 
   // ---------- UI wiring ----------
-  SONGS.forEach((s, i) => ui.song.add(new Option(s.title, i)));
+  function refreshOptions() { ui.song.length = 0; SONGS.forEach((s, i) => ui.song.add(new Option(s.title, i))); }
+  refreshOptions();
   function songChanged() {
-    const hasLeft = !!SONGS[ui.song.value].left;
+    const def = SONGS[ui.song.value], hasLeft = def.notes ? def.notes.some(n => n[3]) && def.notes.some(n => !n[3]) : !!def.left;
     for (const o of ui.hand.options) o.disabled = o.value !== "right" && !hasLeft;
     if (!hasLeft) ui.hand.value = "right";
+    $("title").textContent = SONGS[ui.song.value].title;
     reset();
   }
   ui.song.onchange = songChanged;
+
+  // ---------- Song library screen ----------
+  function showHome() {
+    if (state === "running") pause();
+    const list = $("list");
+    list.textContent = "";
+    for (const level of ["My songs", "Easy", "Medium", "Hard"]) {
+      if (level === "My songs" && !SONGS.some(s => s.notes)) continue;
+      const h = document.createElement("h2"); h.textContent = level; list.append(h);
+      const grid = document.createElement("div"); grid.className = "grid"; list.append(grid);
+      SONGS.forEach((s, i) => {
+        if (s.level !== level) return;
+        let stars = 0;
+        try { stars = +localStorage.getItem("keyfall:stars:" + s.title) || 0; } catch (e) {}
+        const b = document.createElement("button"); b.className = "song " + level.toLowerCase().replace(" ", "");
+        const t = document.createElement("span"); t.className = "t"; t.textContent = s.title;
+        const by = document.createElement("span"); by.className = "by"; by.textContent = s.by + (s.left ? " · two hands" : "");
+        if (s.notes) {
+          const x = document.createElement("span"); x.className = "del"; x.textContent = "✕"; x.title = "Remove this song";
+          x.onclick = ev => { ev.stopPropagation(); SONGS.splice(SONGS.indexOf(s), 1); saveImported(); refreshOptions(); songChanged(); showHome(); };
+          b.append(x);
+        }
+        const st = document.createElement("span"); st.className = "st";
+        for (let k = 0; k < 3; k++) { const x = document.createElement("i"); x.textContent = "★"; if (k < stars) x.className = "on"; st.append(x); }
+        b.append(t, by, st);
+        b.onclick = () => { ui.song.value = i; songChanged(); $("home").hidden = true; ui.hint.hidden = false; };
+        grid.append(b);
+      });
+    }
+    $("home").hidden = false;
+  }
+  $("back").onclick = showHome;
+  $("file").onchange = async ev => {
+    const f = ev.target.files[0], msg = $("importMsg");
+    ev.target.value = "";
+    if (!f) return;
+    try {
+      const notes = parseMidi(await f.arrayBuffer());
+      SONGS.push({ title: f.name.replace(/\.[^.]+$/, "").slice(0, 60), by: "Imported", level: "My songs", notes });
+      saveImported(); refreshOptions();
+      msg.textContent = `Added “${SONGS[SONGS.length - 1].title}” (${notes.length} notes).`;
+      showHome();
+    } catch (e) { msg.textContent = e.message && /MIDI|notes/.test(e.message) ? e.message : "Couldn't read that file. It needs to be a .mid file."; }
+  };
   ui.mode.onchange = ui.hand.onchange = reset;
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";
   ui.start.onclick = toggle;
   ui.mic.onclick = toggleMic;
   ui.restart.onclick = () => { reset(); start(); };
   $("again").onclick = () => { reset(); start(); };
-  $("close").onclick = reset;
+  $("close").onclick = showHome;
   document.querySelectorAll("select, button").forEach(el => el.addEventListener("change", () => el.blur()));
   document.querySelectorAll("button").forEach(el => el.addEventListener("click", () => el.blur()));
 
   window.addEventListener("resize", layout);
-  layout(); songChanged();
+  layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 
   window.__keyfall = { get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };

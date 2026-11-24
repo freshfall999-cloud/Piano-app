@@ -8,10 +8,9 @@
 </head>
 <body>
 <header>
-  <h1>Keyfall</h1>
-  <label>Song
-    <select id="song"></select>
-  </label>
+  <button id="back">‹ Songs</button>
+  <h1 id="title">Keyfall</h1>
+  <select id="song" hidden></select>
   <label>Mode
     <select id="mode">
       <option value="practice">Practice (waits for you)</option>
@@ -48,7 +47,7 @@
 </header>
 <main>
   <canvas id="stage"></canvas>
-  <div id="hint">Pick a song and press Start — or just play freely. Use your computer keyboard, mouse/touch, a MIDI keyboard — or turn on 🎤 Listen and play a real piano. Space = start/pause.</div>
+  <div id="hint">Press Start — or just play freely. Use your computer keyboard, mouse/touch, a MIDI keyboard — or turn on 🎤 Listen and play a real piano. Space = start/pause.</div>
   <div id="results" hidden>
     <div class="card">
       <h2 id="resTitle">Song complete</h2>
@@ -56,10 +55,21 @@
       <p id="resBody"></p>
       <p id="resBest"></p>
       <button id="again" class="primary">Play again</button>
-      <button id="close">Close</button>
+      <button id="close">Songs</button>
     </div>
   </div>
 </main>
+<div id="home">
+  <div class="inner">
+    <div class="brand">Keyfall</div>
+    <p class="sub">Choose a song to practice</p>
+    <label class="import">＋ Add your own song (MIDI file)
+      <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
+    </label>
+    <span id="importMsg"></span>
+    <div id="list"></div>
+  </div>
+</div>
 <script src="songs.js"></script>
 <script src="app.js"></script>
 </body>
