@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"),
+    ignoreTalk: $("ignoreTalk"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -35,13 +35,16 @@
       ac = new AC();
       master = ac.createDynamicsCompressor();
       master.connect(ac.destination);
+      if (window.KeyfallSound) KeyfallSound.init(ac, master);
     }
     if (ac.state === "suspended") ac.resume();
     return ac;
   }
+  const sampled = new Set();
   function noteOn(midi, vel = 0.8) {
     if (!audio()) return;
     noteOff(midi);
+    if (window.KeyfallSound && KeyfallSound.noteOn(midi, vel)) { sampled.add(midi); return; }   // recorded grand piano
     const t = ac.currentTime, f = 440 * Math.pow(2, (midi - 69) / 12);
     const gain = ac.createGain(), lp = ac.createBiquadFilter();
     lp.type = "lowpass";
@@ -62,6 +65,7 @@
     voices.set(midi, { gain, oscs });
   }
   function noteOff(midi) {
+    if (sampled.delete(midi)) { KeyfallSound.noteOff(midi); return; }
     const v = voices.get(midi);
     if (!v) return;
     voices.delete(midi);
@@ -69,6 +73,13 @@
     v.gain.gain.cancelScheduledValues(t);
     v.gain.gain.setTargetAtTime(0, t, 0.06);
     v.oscs.forEach(o => { try { o.stop(t + 0.4); } catch (e) {} });
+  }
+
+  const reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function sfx(name, arg) {
+    if (!window.KeyfallSound || !ui.sfx.checked || !audio()) return;
+    if (mic.on && (state === "running" || drill || train)) return;
+    KeyfallSound.sfx(name, arg);
   }
 
   // ---------- Songs ----------
@@ -215,15 +226,36 @@
     ui.acc.textContent = total ? Math.round(100 * hits / total) + "%" : "–";
   }
   let streakAt = 0;
+  const particles = [], beams = [], wrongs = [];
+  function burst(midi, color, big) {
+    if (midi < LOW || midi > HIGH || !keys.length) return;
+    const k = keyOf(midi), x = k.x + k.w / 2, now = performance.now();
+    beams.push({ x, w: k.w, color, t: now });
+    if (reduceMotion) return;
+    const n = big ? 34 : 18;
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.9, v = 120 + Math.random() * (big ? 320 : 220);
+      particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.6, y: kbTop - 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+        life: 450 + Math.random() * 450, t: now, r: 1.5 + Math.random() * (big ? 3 : 2.2), c: Math.random() < 0.35 ? "#ffffff" : color });
+    }
+    if (particles.length > 400) particles.splice(0, particles.length - 400);
+  }
+  function bump(el) { el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump"); }
   function registerHit(n, perfect) {
     n.state = "hit"; hits++; streak++; bestStreak = Math.max(bestStreak, streak);
+    burst(n.midi, perfect ? "#8dffb0" : COLORS[n.hand] || "#39b6ff", streak >= 5 && streak % 5 === 0);
+    bump(ui.scoreBox); if (streak > 1) bump(ui.streakBox);
+    if (streak >= 5 && streak % 5 === 0) sfx("streak"); else if (perfect) sfx("perfect");
     if (streak >= 5 && streak % 5 === 0) streakAt = performance.now();
     if (perfect) perfects++;
     score += (perfect ? 100 : 50) + Math.min(streak, 50);
     flashes.push({ midi: n.midi, t: performance.now(), text: perfect ? "Perfect" : "Good" });
     updateHud();
   }
-  function registerWrong() { wrong++; streak = 0; updateHud(); }
+  function registerWrong(midi) {
+    wrong++; streak = 0; updateHud(); sfx("wrong");
+    if (midi != null) wrongs.push({ midi, t: performance.now() });
+  }
 
   function nextGroup() {                 // earliest pending user notes (a chord shares a start)
     const first = song.notes.find(n => n.state === "pending" && isUser(n));
@@ -239,13 +271,13 @@
       const g = nextGroup();
       if (!g.length || g[0].start - time > 0.35) return;
       const n = g.find(n => n.midi === midi);
-      n ? registerHit(n, true) : registerWrong();
+      n ? registerHit(n, true) : registerWrong(midi);
     } else {
       let best = null;
       for (const n of song.notes)
         if (n.state === "pending" && n.midi === midi && isUser(n) && Math.abs(n.start - time) <= HIT_WINDOW &&
             (!best || Math.abs(n.start - time) < Math.abs(best.start - time))) best = n;
-      best ? registerHit(best, Math.abs(best.start - time) <= PERFECT) : registerWrong();
+      best ? registerHit(best, Math.abs(best.start - time) <= PERFECT) : registerWrong(midi);
     }
   }
   function release(midi) {
@@ -253,9 +285,15 @@
     if (!autoDown.has(midi)) noteOff(midi);
   }
 
+  let lastCount = null;
   function step(dt) {
     if (state !== "running") return;
+    const before = time;
     time += dt * ui.speed.value / 100;
+    if (before < 0) {
+      const c = Math.ceil(-time);
+      if (time >= 0) { sfx("go"); lastCount = null; } else if (c !== lastCount) { lastCount = c; sfx("tick"); }
+    }
     if (mode() === "practice") {
       const g = nextGroup();
       if (g.length && time > g[0].start) time = g[0].start;   // wait for the player
@@ -282,7 +320,10 @@
     try { best = +localStorage.getItem(key) || 0; if (score > best) localStorage.setItem(key, score); } catch (e) {}
     try { const k = "keyfall:stars:" + song.def.title; if (stars > (+localStorage.getItem(k) || 0)) localStorage.setItem(k, stars); } catch (e) {}
     $("resTitle").textContent = song.def.title;
-    $("stars").innerHTML = [0, 1, 2].map(i => `<span class="${i < stars ? "" : "off"}">★</span>`).join("");
+    $("stars").innerHTML = [0, 1, 2].map(i => `<span class="${i < stars ? "on" : "off"}" style="animation-delay:${0.35 + i * 0.28}s">★</span>`).join("");
+    sfx("complete");
+    for (let i = 0; i < stars; i++) setTimeout(() => sfx("star", i), 350 + i * 280);
+    if (!reduceMotion) for (let i = 0; i < 5; i++) setTimeout(() => burst(LOW + Math.floor(Math.random() * (HIGH - LOW)), ["#ffcc4d", "#8dffb0", "#39b6ff"][i % 3], true), i * 160);
     $("resBody").textContent = mode() === "play"
       ? `Score ${score} · Accuracy ${acc}% · ${perfects} perfect · ${misses} missed · ${wrong} wrong · best streak ${bestStreak}`
       : `Accuracy ${acc}% · ${wrong} wrong notes · best streak ${bestStreak}`;
@@ -325,9 +366,10 @@
     ui.hint.hidden = true;
     if (midi === d.target.midi) {
       hits++; streak++; bestStreak = Math.max(bestStreak, streak); score += 10;
+      burst(midi, "#8dffb0", streak >= 5 && streak % 5 === 0); bump(ui.scoreBox); sfx(streak % 5 === 0 ? "streak" : "perfect");
       d.done = true; d.doneAt = performance.now();
       setTimeout(() => { if (drill === d) nextDrill(); }, 550);
-    } else { wrong++; streak = 0; d.tries++; d.wrongKey = midi; d.wrongAt = performance.now(); }
+    } else { wrong++; streak = 0; d.tries++; d.wrongKey = midi; d.wrongAt = performance.now(); sfx("wrong"); }
     updateHud();
   }
   function drawStaff() {
@@ -623,14 +665,15 @@
           // watched overtone (peak bin, refined by fitting a parabola) whenever it is clearly loud.
           const rb = mic.ref[m];
           // a piano note fades slowly after its strike; a syllable of speech collapses within a tenth of a second
+          // (measured only down to the background: a soft note just above the hiss can't "collapse" by more than that)
           if (rb > 0) {
             if (L[rb] > mic.pk[m]) mic.pk[m] = L[rb];
-            else mic.drop[m] = Math.max(mic.drop[m], mic.pk[m] - L[rb]);
+            else mic.drop[m] = Math.max(mic.drop[m], mic.pk[m] - Math.max(L[rb], noiseAt(rb)));
           }
           const rb2 = mic.ref2[m];
           if (rb2 > 0) {
             if (L[rb2] > mic.pk2[m]) mic.pk2[m] = L[rb2];
-            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - L[rb2]);
+            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - Math.max(L[rb2], noiseAt(rb2)));
           }
           if (rb >= 62 && L[rb] >= noiseAt(rb) + 12 && peaky(rb, 3)) {
             const [i0, i1] = mic.bands[rb];
@@ -772,7 +815,7 @@
     }
     T.data.keys[m] = { lv: c.lv.map(v => Math.round(v * 10) / 10), rs: c.rs.map(v => Math.round(v * 10) / 10) };
     T.msg = problem ? "Saved it anyway. If that was the wrong key, tap Back one key." : "";
-    T.okAt = now; T.rejects = 0;
+    T.okAt = now; T.rejects = 0; burst(m, "#5fd38a", false);
     calib = T.data; saveCalib(); buildTemplates();     // keep progress even if training stops halfway
     if (++T.i >= T.keys.length) finishTraining();
   }
@@ -824,6 +867,7 @@
     const kbH = Math.max(90, Math.min(H * 0.26, 200));
     kbTop = H - kbH;
     let whites = 0;
+    grad = null;
     for (let m = LOW; m <= HIGH; m++) if (!isBlack(m)) whites++;
     whiteW = W / whites;
     keys = [];
@@ -835,6 +879,8 @@
   }
   const keyOf = m => keys[m - LOW];
   const COLORS = { right: "#39b6ff", left: "#ffa23a" };
+  const LIGHT = { "#39b6ff": "#8fd8ff", "#ffa23a": "#ffd08f", "#e2495b": "#ff8e9b" };
+  const DARK = { "#39b6ff": "#1f86c9", "#ffa23a": "#d9761a", "#e2495b": "#b02a3b" };
 
   function rrect(x, y, w, h, r) {
     r = Math.min(r, w / 2, h / 2);
@@ -843,13 +889,44 @@
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
+  let grad = null;                                    // gradients that only change with the layout
+  function gradients() {
+    const g = {};
+    g.bg = ctx.createLinearGradient(0, 0, 0, kbTop);
+    g.bg.addColorStop(0, "#161a29"); g.bg.addColorStop(0.7, "#11141e"); g.bg.addColorStop(1, "#0c0e15");
+    g.white = ctx.createLinearGradient(0, kbTop, 0, H);
+    g.white.addColorStop(0, "#d9dce6"); g.white.addColorStop(0.06, "#ffffff"); g.white.addColorStop(0.85, "#f1f2f7"); g.white.addColorStop(1, "#c9ccd8");
+    g.black = ctx.createLinearGradient(0, kbTop, 0, kbTop + (H - kbTop) * 0.62);
+    g.black.addColorStop(0, "#0a0b10"); g.black.addColorStop(0.1, "#2a2d39"); g.black.addColorStop(0.88, "#14161d"); g.black.addColorStop(1, "#050608");
+    g.shade = ctx.createLinearGradient(0, kbTop, 0, kbTop + 14);
+    g.shade.addColorStop(0, "rgba(0,0,0,.45)"); g.shade.addColorStop(1, "rgba(0,0,0,0)");
+    return g;
+  }
+  function keyFill(color, k) {                        // a lit key: the colour, brighter at the top, with a soft sheen
+    const gr = ctx.createLinearGradient(0, kbTop, 0, kbTop + k.h);
+    gr.addColorStop(0, color); gr.addColorStop(0.75, color); gr.addColorStop(1, k.black ? "#0d2a3f" : "#ffffff");
+    return gr;
+  }
+
   function draw() {
-    ctx.fillStyle = "#12141c"; ctx.fillRect(0, 0, W, H);
+    if (!grad) grad = gradients();
+    const now = performance.now();
+    ctx.fillStyle = grad.bg; ctx.fillRect(0, 0, W, kbTop);
     // lane guides at each C
-    ctx.strokeStyle = "#1f2331"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(127,212,255,.06)"; ctx.lineWidth = 1;
     for (const k of keys) if (!k.black && k.midi % 12 === 0) {
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
+    // light beams rising from keys that were just hit
+    for (let i = beams.length - 1; i >= 0; i--) {
+      const bm = beams[i], a = (now - bm.t) / 420;
+      if (a >= 1) { beams.splice(i, 1); continue; }
+      const gr = ctx.createLinearGradient(0, kbTop, 0, kbTop - kbTop * 0.55);
+      gr.addColorStop(0, bm.color); gr.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.globalAlpha = 0.45 * (1 - a); ctx.fillStyle = gr;
+      ctx.fillRect(bm.x - bm.w * (0.5 + a * 0.4), kbTop - kbTop * 0.55, bm.w * (1 + a * 0.8), kbTop * 0.55);
+    }
+    ctx.globalAlpha = 1;
     // falling notes
     if (song && !drill && !train) {
       const pps = kbTop / LOOKAHEAD;
@@ -859,10 +936,17 @@
         const k = keyOf(n.midi), inset = k.black ? 0 : k.w * 0.14;
         const yb = kbTop - (n.start - time) * pps, h = Math.max(n.dur * pps - 3, 8);
         const user = isUser(n);
-        ctx.globalAlpha = n.state === "hit" ? 0.45 : user ? 1 : 0.5;
-        ctx.fillStyle = n.state === "miss" ? "#e2495b" : COLORS[n.hand];
-        rrect(k.x + inset, yb - h, k.w - inset * 2, h, 5); ctx.fill();
-        if (k.black) { ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.fill(); }
+        ctx.globalAlpha = n.state === "hit" ? 0.35 : user ? 1 : 0.5;
+        const base = n.state === "miss" ? "#e2495b" : COLORS[n.hand], x0 = k.x + inset, w0 = k.w - inset * 2;
+        const near = user && n.state === "pending" && n.start - time < 0.35 && n.start + n.dur > time;
+        if (near) { ctx.shadowColor = base; ctx.shadowBlur = 16; }
+        const gr = ctx.createLinearGradient(x0, 0, x0 + w0, 0);
+        gr.addColorStop(0, LIGHT[base] || base); gr.addColorStop(0.55, base); gr.addColorStop(1, DARK[base] || base);
+        ctx.fillStyle = gr; rrect(x0, yb - h, w0, h, 6); ctx.fill();
+        ctx.shadowBlur = 0;
+        if (k.black) { ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.fill(); }
+        ctx.fillStyle = "rgba(255,255,255,.28)";           // glossy highlight down the left edge
+        rrect(x0 + 2, yb - h + 2, Math.max(2, w0 * 0.22), h - 4, 3); ctx.fill();
         const bw = k.w - inset * 2;
         if (user && bw >= 14 && h >= 18 && n.state !== "hit") {          // the note's name at the bottom of its bar
           ctx.fillStyle = "rgba(255,255,255,.92)"; ctx.textAlign = "center";
@@ -885,8 +969,7 @@
       }
     }
     // keyboard
-    ctx.fillStyle = "#0b0c11"; ctx.fillRect(0, kbTop - 3, W, H - kbTop + 3);
-    ctx.fillStyle = "#7fd4ff"; ctx.fillRect(0, kbTop - 3, W, 2);
+    ctx.fillStyle = "#07080c"; ctx.fillRect(0, kbTop - 3, W, H - kbTop + 3);
     const target = new Set();
     if (song && state !== "idle" && mode() === "practice") nextGroup().forEach(n => {
       if (n.start - time < 0.01) target.add(n.midi);
@@ -900,9 +983,20 @@
       if (k.black !== pass) continue;
       const on = down.has(k.midi) || autoDown.has(k.midi) || mic.note === k.midi;
       const learned = train && train.data.keys[k.midi];
-      ctx.fillStyle = k.midi === badKey ? "#ff6b7d" : target.has(k.midi) ? (pass ? "#2e7d4f" : "#a8f0c0") : on ? "#39b6ff"
-        : learned ? (pass ? "#34507a" : "#cfe2fb") : pass ? "#181a22" : "#f4f5f9";
-      rrect(k.x + (pass ? 0 : 1), kbTop, k.w - (pass ? 0 : 2), k.h - 2, 4); ctx.fill();
+      const flash = wrongs.some(w => w.midi === k.midi && now - w.t < 350);
+      const lit = k.midi === badKey || flash ? "#ff6b7d" : target.has(k.midi) ? (pass ? "#2e9d5f" : "#8fe9b0") : on ? (pass ? "#1f86c9" : "#7ccdff")
+        : learned ? (pass ? "#34507a" : "#cfe2fb") : null;
+      const kx = k.x + (pass ? 0 : 1), kw = k.w - (pass ? 0 : 2), kh = k.h - (on && !pass ? 0 : 3);
+      if (lit && (on || target.has(k.midi))) { ctx.shadowColor = lit; ctx.shadowBlur = 14; }
+      ctx.fillStyle = lit ? keyFill(lit, k) : pass ? grad.black : grad.white;
+      rrect(kx, kbTop - 2, kw, kh + 2, pass ? 3 : 5); ctx.fill();
+      ctx.shadowBlur = 0;
+      if (pass) {                                        // black keys: a polished bevel catching the light
+        ctx.fillStyle = "rgba(255,255,255,.13)";
+        rrect(kx + kw * 0.14, kbTop + 4, kw * 0.72, kh * 0.78, 2); ctx.fill();
+      } else if (!lit) {
+        ctx.fillStyle = "rgba(0,0,0,.05)"; ctx.fillRect(kx + kw - 1, kbTop, 1, kh);
+      }
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
       if (!text || k.w < 11) continue;
@@ -910,17 +1004,38 @@
       ctx.fillStyle = pass ? "#9aa0b8" : "#5a6078";
       ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10);
     }
+    ctx.fillStyle = grad.shade; ctx.fillRect(0, kbTop, W, 14);     // shadow under the rail
+    // the hit line: a glowing rail the notes land on
+    ctx.shadowColor = "#7fd4ff"; ctx.shadowBlur = 12;
+    ctx.fillStyle = "#7fd4ff"; ctx.fillRect(0, kbTop - 3, W, 2);
+    ctx.shadowBlur = 0;
+    // sparks from hits
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const pt = particles[i], a = (now - pt.t) / pt.life;
+      if (a >= 1) { particles.splice(i, 1); continue; }
+      const t = (now - pt.t) / 1000;
+      const px = pt.x + pt.vx * t, py = pt.y + pt.vy * t + 260 * t * t, r = pt.r * (1 - a * 0.4);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = (1 - a) * 0.35; ctx.fillStyle = pt.c;                 // soft halo
+      ctx.beginPath(); ctx.arc(px, py, r * 3, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1 - a;                                                  // bright core
+      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    if (wrongs.length && now - wrongs[0].t > 400) wrongs.shift();
     if (drill) drawStaff();
     if (train) drawTraining();
     // hit feedback
-    const now = performance.now();
+
     ctx.textAlign = "center";
+    ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 6;
     for (let i = flashes.length - 1; i >= 0; i--) {
       const f = flashes[i], a = (now - f.t) / 700;
       if (a >= 1 || f.midi < LOW || f.midi > HIGH) { flashes.splice(i, 1); continue; }
       const k = keyOf(f.midi), pop = 1 + 0.25 * Math.max(0, 1 - a * 5);
-      ctx.globalAlpha = 1 - a * a;
-      ctx.font = `800 ${Math.round(18 * pop)}px system-ui, sans-serif`;
+      ctx.globalAlpha = 1 - a * a * a;
+      ctx.font = `800 ${Math.round(20 * pop)}px system-ui, sans-serif`;
       ctx.fillStyle = f.text === "Perfect" ? "#8dffb0" : "#ffe08a";
       ctx.fillText(f.text, k.x + k.w / 2, kbTop - 18 - a * 40);
     }
@@ -931,6 +1046,7 @@
       ctx.fillStyle = "#ffcc4d";
       ctx.fillText(`🔥 ${streak} in a row`, W / 2, kbTop * 0.42);
     }
+    ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
     // microphone button: live level (how far the sound is above the room's background) and the note heard
     if (mic.on) {
@@ -1062,7 +1178,8 @@
         const st = document.createElement("span"); st.className = "st";
         for (let k = 0; k < 3; k++) { const x = document.createElement("i"); x.textContent = "★"; if (k < stars) x.className = "on"; st.append(x); }
         b.append(t, by, st);
-        b.onclick = () => { ui.song.value = i; $("home").hidden = true; songChanged(); };
+        b.style.setProperty("--i", grid.children.length);
+        b.onclick = () => { ui.song.value = i; $("home").hidden = true; songChanged(); sfx("open"); };
         grid.append(b);
       });
     }
@@ -1095,7 +1212,9 @@
   };
   ui.mode.onchange = ui.hand.onchange = reset;
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";
-  ui.start.onclick = toggle;
+  ui.start.onclick = () => { sfx("click"); toggle(); };
+  try { if (localStorage.getItem("keyfall:sfx") === "0") ui.sfx.checked = false; } catch (e) {}
+  ui.sfx.onchange = () => { try { localStorage.setItem("keyfall:sfx", ui.sfx.checked ? "1" : "0"); } catch (e) {} };
   ui.pause.onclick = toggle;
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
@@ -1106,7 +1225,7 @@
   document.querySelectorAll("select, button, input[type=checkbox]").forEach(el => el.addEventListener("change", () => el.blur()));
   document.querySelectorAll("button").forEach(el => el.addEventListener("click", () => el.blur()));
 
-  window.addEventListener("resize", layout);
+  window.addEventListener("resize", () => { layout(); grad = null; });
   layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 

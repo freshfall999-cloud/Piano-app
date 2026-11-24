@@ -102,14 +102,17 @@
         <option value="high">High (quiet piano)</option>
       </select>
     </label>
+    <label class="sensrow"><input type="checkbox" id="sfx" checked> Sound effects</label>
     <label class="sensrow"><input type="checkbox" id="ignoreTalk" checked> Ignore talking (turn off if very short, staccato notes are missed)</label>
     <label class="import">＋ Add your own song (MIDI file)
       <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
     </label>
     <span id="importMsg"></span>
     <div id="list"></div>
+    <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0).</p>
   </div>
 </div>
+<script src="sound.js"></script>
 <script src="songs.js"></script>
 <script src="app.js"></script>
 </body>
