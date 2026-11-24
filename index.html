@@ -8,33 +8,12 @@
 </head>
 <body>
 <header id="bar">
-  <button id="back">‹ Songs</button>
-  <h1 id="title">Keyfall</h1>
+  <button id="back" class="iconbtn" title="Back to songs" aria-label="Back to songs">‹</button>
+  <div class="titlebox">
+    <h1 id="title">Keyfall</h1>
+    <div class="prog"><i id="progFill"></i></div>
+  </div>
   <select id="song" hidden></select>
-  <label class="songonly">Mode
-    <select id="mode">
-      <option value="practice">Practice (waits for you)</option>
-      <option value="play">Play (in time, scored)</option>
-      <option value="listen">Listen (demo)</option>
-    </select>
-  </label>
-  <label class="songonly">Hand
-    <select id="hand">
-      <option value="right">Right hand only</option>
-      <option value="left">Left hand only</option>
-      <option value="both">Both (you play it all)</option>
-    </select>
-  </label>
-  <label class="songonly">Speed <span id="speedVal">100%</span>
-    <input id="speed" type="range" min="40" max="150" step="5" value="100">
-  </label>
-  <label class="songonly">Labels
-    <select id="labels">
-      <option value="keys">Computer keys</option>
-      <option value="notes">Note names</option>
-      <option value="off">Off</option>
-    </select>
-  </label>
   <label class="drillonly">Clef
     <select id="dClef">
       <option value="treble">Treble</option>
@@ -48,19 +27,49 @@
   <button id="tBack" class="trainonly">Back one key</button>
   <button id="tSkip" class="trainonly">Skip key</button>
   <button id="tDone" class="trainonly primary">Finish</button>
-  <button id="mic" title="Listen to a real piano through the microphone">🎤 Listen: off</button>
-  <button id="start" class="primary songonly">Start</button>
-  <button id="restart" class="songonly">Restart</button>
   <div id="hud">
-    <span>Score <b id="score">0</b></span>
-    <span>Streak <b id="streak">0</b></span>
-    <span>Accuracy <b id="acc">–</b></span>
-    <span id="midi" title="MIDI keyboard status">MIDI: –</span>
+    <div class="stat"><span>Score</span><b id="score">0</b></div>
+    <div class="stat" id="streakBox"><span>Streak</span><b id="streak">0</b></div>
+    <div class="stat"><span>Accuracy</span><b id="acc">–</b></div>
   </div>
+  <span id="midi" hidden></span>
+  <button id="mic" title="Listen to a real piano through the microphone"><i id="micLvl"></i><span id="micText">🎤 Listen: off</span></button>
+  <button id="pause" class="songonly iconbtn" title="Pause" aria-label="Pause" hidden>❚❚</button>
 </header>
 <main>
   <canvas id="stage"></canvas>
-  <div id="hint">Press Start — or just play freely. Use your computer keyboard, mouse/touch, a MIDI keyboard — or turn on 🎤 Listen and play a real piano. Space = start/pause.</div>
+  <div id="hint" hidden></div>
+  <div id="ready" hidden>
+    <div class="card readycard">
+      <div class="rtitle" id="readyTitle"></div>
+      <div class="rsub" id="readySub"></div>
+      <div class="rgrid">
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="practice">Practice: waits for you</option>
+          <option value="play">Play: in time, scored</option>
+          <option value="listen">Listen: hear the song</option>
+        </select>
+        <label for="hand">Hands</label>
+        <select id="hand">
+          <option value="right">Right hand only</option>
+          <option value="left">Left hand only</option>
+          <option value="both">Both hands</option>
+        </select>
+        <label for="speed">Speed</label>
+        <div class="speedrow"><input id="speed" type="range" min="40" max="150" step="5" value="100"><span id="speedVal">100%</span></div>
+        <label for="labels">Key labels</label>
+        <select id="labels">
+          <option value="notes">Note names</option>
+          <option value="keys">Computer keys</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <button id="start" class="primary big">Start</button>
+      <button id="restart" hidden>Start over</button>
+      <p class="rhint">Play on the screen, a MIDI keyboard, or your real piano with 🎤 Listen.</p>
+    </div>
+  </div>
   <div id="results" hidden>
     <div class="card">
       <h2 id="resTitle">Song complete</h2>
@@ -93,6 +102,7 @@
         <option value="high">High (quiet piano)</option>
       </select>
     </label>
+    <label class="sensrow"><input type="checkbox" id="ignoreTalk" checked> Ignore talking (turn off if very short, staccato notes are missed)</label>
     <label class="import">＋ Add your own song (MIDI file)
       <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
     </label>

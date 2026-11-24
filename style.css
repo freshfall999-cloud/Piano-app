@@ -7,10 +7,14 @@ body {
   overflow: hidden; touch-action: none;
 }
 header {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
   padding: 8px 14px; background: #1b1e2a; border-bottom: 1px solid #2c3042;
 }
-h1 { font-size: 17px; margin: 0 6px 0 0; color: #fff; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.titlebox { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1 1 160px; }
+h1 { font-size: 17px; margin: 0; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prog { height: 4px; border-radius: 2px; background: #2c3042; overflow: hidden; max-width: 320px; }
+.prog i { display: block; height: 100%; width: 0; background: #39b6ff; }
+.iconbtn { min-width: 40px; height: 40px; font-size: 20px; line-height: 1; padding: 0 10px; border-radius: 10px; }
 label { display: flex; align-items: center; gap: 6px; color: #a3a8bd; }
 select, button, input { font: inherit; }
 select, button {
@@ -21,10 +25,21 @@ button { cursor: pointer; }
 button:hover { background: #30354a; }
 button.primary { background: #2f8fd8; border-color: #2f8fd8; color: #fff; font-weight: 600; }
 button.primary:hover { background: #3aa0ec; }
-#speed { width: 110px; }
 #speedVal { color: #e8eaf2; min-width: 38px; }
-#hud { margin-left: auto; display: flex; gap: 14px; color: #a3a8bd; }
-#hud b { color: #fff; font-variant-numeric: tabular-nums; }
+#hud { margin-left: auto; display: flex; gap: 8px; }
+.stat {
+  display: flex; flex-direction: column; align-items: center; min-width: 74px; padding: 4px 10px;
+  background: #232738; border: 1px solid #333a52; border-radius: 10px;
+}
+.stat span { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #8c92aa; }
+.stat b { font-size: 20px; line-height: 1.1; color: #fff; font-variant-numeric: tabular-nums; }
+#streakBox.hot { border-color: #ff9f43; background: #3a2a1c; }
+#streakBox.hot b { color: #ffcc4d; }
+#mic { position: relative; overflow: hidden; height: 40px; border-radius: 10px; padding: 0 12px; min-width: 128px; }
+#mic.primary { background: #1d4f3a; border-color: #2f8f5f; }
+#micLvl { position: absolute; left: 0; bottom: 0; height: 4px; width: 0; background: #5fd38a; transition: width .08s linear; }
+#mic.warn #micLvl { background: #ffc14d; }
+#pause { margin-left: 2px; }
 main { position: relative; flex: 1; min-height: 0; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 #hint {
@@ -32,11 +47,22 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   max-width: 90%; padding: 8px 14px; border-radius: 8px;
   background: rgba(27, 30, 42, .85); color: #a3a8bd; text-align: center; pointer-events: none;
 }
-#results {
+#results, #ready {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  background: rgba(10, 11, 16, .7);
+  background: rgba(10, 11, 16, .7); padding: 16px;
 }
-#results[hidden] { display: none; }
+#results[hidden], #ready[hidden] { display: none; }
+#ready { background: rgba(10, 11, 16, .55); }
+.readycard { text-align: left; width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; }
+.rtitle { font-size: 24px; font-weight: 800; color: #fff; }
+.rsub { color: #a3a8bd; margin-top: -8px; }
+.rgrid { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; }
+.rgrid select { width: 100%; padding: 8px 10px; }
+.speedrow { display: flex; align-items: center; gap: 10px; }
+.speedrow input { flex: 1; }
+.card button.big { font-size: 18px; padding: 12px; margin: 4px 0 0; border-radius: 10px; }
+.card #restart { margin: 0; }
+.rhint { margin: 0; color: #8c92aa; font-size: 13px; }
 .card {
   background: #1b1e2a; border: 1px solid #3a3f56; border-radius: 12px;
   padding: 22px 30px; text-align: center; min-width: 280px;
@@ -91,7 +117,7 @@ input[type=checkbox] { width: 18px; height: 18px; }
 }
 .traincard { border-color: #4f7a4f; background: #1d3527; }
 .traincard:hover, .traincard:active { background: #244232; }
-header:not(.train) .trainonly, header.train .songonly, header.train .drillonly, header.train #hud > span:not(#midi) { display: none; }
+header:not(.train) .trainonly, header.train .songonly, header.train .drillonly, header.train #hud { display: none; }
 .sensrow { margin: 0 0 12px; }
 .drillcard:hover, .drillcard:active { background: #234064; }
 .drillcard .t { font-size: 18px; font-weight: 700; color: #fff; }

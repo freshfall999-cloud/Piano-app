@@ -19,6 +19,8 @@
     song: $("song"), mode: $("mode"), hand: $("hand"), speed: $("speed"), speedVal: $("speedVal"),
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
+    ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
+    ignoreTalk: $("ignoreTalk"),
   };
 
   const HINT = ui.hint.textContent;
@@ -186,15 +188,21 @@
     time = -2; score = streak = bestStreak = hits = perfects = misses = wrong = 0;
     autoDown.forEach((_, m) => noteOff(m)); autoDown.clear();
     state = "idle"; ui.start.textContent = "Start"; ui.results.hidden = true;
+    ui.restart.hidden = true; ui.pause.hidden = true;
+    const def = SONGS[ui.song.value];
+    $("readyTitle").textContent = def.title;
+    $("readySub").textContent = [def.by, def.level, def.left || (def.notes && def.notes.some(n => n[3])) ? "two hands" : "one hand"].filter(Boolean).join(" · ");
+    ui.ready.hidden = !$("home").hidden || !!drill || !!train;
     updateHud();
   }
   function start() {
     audio();
     if (state === "done" || !song) reset();
-    state = "running"; ui.start.textContent = "Pause"; ui.hint.hidden = true;
+    state = "running"; ui.hint.hidden = true; ui.ready.hidden = true; ui.pause.hidden = false;
   }
   function pause() {
-    state = "paused"; ui.start.textContent = "Resume";
+    state = "paused"; ui.start.textContent = "Resume"; ui.restart.hidden = false; ui.pause.hidden = true;
+    ui.ready.hidden = !!drill || !!train || !$("home").hidden;
     autoDown.forEach((_, m) => noteOff(m)); autoDown.clear();
   }
   function toggle() { state === "running" ? pause() : start(); }
@@ -202,11 +210,14 @@
   function updateHud() {
     ui.score.textContent = score;
     ui.streak.textContent = streak;
+    ui.streakBox.classList.toggle("hot", streak >= 5);
     const total = hits + misses + wrong;
     ui.acc.textContent = total ? Math.round(100 * hits / total) + "%" : "–";
   }
+  let streakAt = 0;
   function registerHit(n, perfect) {
     n.state = "hit"; hits++; streak++; bestStreak = Math.max(bestStreak, streak);
+    if (streak >= 5 && streak % 5 === 0) streakAt = performance.now();
     if (perfect) perfects++;
     score += (perfect ? 100 : 50) + Math.min(streak, 50);
     flashes.push({ midi: n.midi, t: performance.now(), text: perfect ? "Perfect" : "Good" });
@@ -262,7 +273,7 @@
   }
 
   function finish() {
-    state = "done"; ui.start.textContent = "Start";
+    state = "done"; ui.start.textContent = "Start"; ui.pause.hidden = true;
     if (mode() === "listen") { reset(); return; }
     const total = hits + misses + wrong, acc = total ? Math.round(100 * hits / total) : 0;
     const stars = acc >= 95 ? 3 : acc >= 80 ? 2 : acc >= 50 ? 1 : 0;
@@ -305,7 +316,7 @@
     drill = {};
     LOW = 36; HIGH = 84; layout();
     nextDrill();
-    $("home").hidden = true; $("bar").classList.add("drill"); $("title").textContent = "Note practice";
+    $("home").hidden = true; $("bar").classList.add("drill"); $("title").textContent = "Note practice"; ui.ready.hidden = true; ui.pause.hidden = true;
     ui.hint.textContent = "Find the note shown on the staff and play it."; ui.hint.hidden = false;
   }
   function drillAnswer(midi) {
@@ -381,6 +392,8 @@
     armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
     onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
     lowEv: new Uint8Array(128), upTone: new Uint8Array(128), own: new Uint8Array(128), seen: new Uint8Array(128), groupHitAt: 0, groupStart: null,
+    ref: new Int16Array(128), pMin: new Float32Array(128), pMax: new Float32Array(128), pN: new Uint8Array(128), pk: new Float32Array(128), drop: new Float32Array(128),
+    ref2: new Int16Array(128), ref3: new Int16Array(128), pk2: new Float32Array(128), drop2: new Float32Array(128),
   };
   const nm = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
 
@@ -422,17 +435,17 @@
   async function toggleMic() {
     if (mic.on) {
       mic.stream.getTracks().forEach(t => t.stop());
-      mic.on = false; mic.note = null; ui.mic.textContent = "🎤 Listen: off"; ui.mic.classList.remove("primary");
+      mic.on = false; mic.note = null; ui.micText.textContent = "🎤 Listen: off"; ui.mic.classList.remove("primary");
       return;
     }
-    if (!audio() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { ui.mic.textContent = "🎤 Mic unsupported"; return; }
+    if (!audio() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { ui.micText.textContent = "🎤 Mic unsupported"; return; }
     // ask for the raw microphone: voice processing (echo cancellation, noise suppression, auto gain) treats
     // a held piano note as noise and turns soft playing down
     const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     try {
       try { mic.stream = await navigator.mediaDevices.getUserMedia({ audio: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { exact: v }])) }); }
       catch (e) { if (e && e.name === "NotAllowedError") throw e; mic.stream = await navigator.mediaDevices.getUserMedia({ audio: raw }); }
-    } catch (e) { ui.mic.textContent = "🎤 Mic blocked"; return; }
+    } catch (e) { ui.micText.textContent = "🎤 Mic blocked"; return; }
     const track = mic.stream.getAudioTracks()[0], st = track && track.getSettings ? track.getSettings() : {};
     mic.filtered = st.echoCancellation === true || st.noiseSuppression === true || st.autoGainControl === true;
     mic.analyser = ac.createAnalyser();
@@ -451,7 +464,7 @@
       mic.bands[k] = [i0, Math.min(i1, nb - 1)];
     }
     mic.hist = []; mic.live.fill(-200); mic.spread.fill(9); mic.over.fill(0); mic.roomDb = null; mic.startAt = performance.now();
-    mic.on = true; ui.mic.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
+    mic.on = true; ui.micText.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
   }
 
   function detectPitch(x, sr) {
@@ -503,13 +516,16 @@
       let pk = -200;
       for (let i = i0; i <= i1; i++) if (spec[i] > pk) pk = spec[i];
       L[k] = pk;
+    }
+    for (let k = BLO; k <= BHI; k++) {
       // background level per band: a running mean and spread that ignore anything far above it (the notes)
-      const d = pk - live[k], sp = mic.spread;
+      const pk = L[k], d = pk - live[k], sp = mic.spread;
       if (live[k] <= -199) { live[k] = pk; sp[k] = 9; }
       else if (now - mic.startAt < 1000) { live[k] += 0.1 * d; sp[k] = Math.max(1, sp[k] + 0.1 * (d * d - sp[k])); }   // settling in
       else if (d < 3 * Math.sqrt(sp[k]) + 3) {
         live[k] += (d < 0 ? 0.03 : 0.01) * d; sp[k] = Math.max(1, sp[k] + 0.01 * (d * d - sp[k])); mic.over[k] = 0;
-      } else if (++mic.over[k] > 120) {               // louder for 2 seconds straight: that's the room now, not a note
+      } else if (peaky(k, 3)) mic.over[k] = 0;           // a held note is a clear tone: never part of the background
+      else if (++mic.over[k] > 120) {                     // a louder hiss for 2 seconds straight: that's the room now
         live[k] += 0.05 * d; sp[k] = Math.max(1, sp[k] + 0.05 * (d * d - sp[k]));
       }
     }
@@ -581,12 +597,52 @@
           if (strict) {
             mic.onsetAt[m] = now; mic.armed[m] = 0; mic.peak[m] = level; mic.hitAt[m] = now;
             mic.lowEv[m] = mic.upTone[m] = mic.own[m] = mic.seen[m] = 0;
+            // watch the two overtones (above 300 Hz, where pitch resolution is fine) that jumped most at this strike,
+            // so the bands hold this note's sound rather than an earlier note's
+            let best = -1, second = -1, third = -1;
+            // prefer its strong lower overtones (1st to 6th) above 300 Hz; else lower ones; else any loud overtone
+            for (const [lowOk, upto] of [[false, 6], [true, 6], [true, 10]]) {
+              for (const o of HARM.slice(0, upto)) {
+                const b = m + o;
+                if (b > BHI) break;
+                if ((!lowOk && b < 62) || L[b] < noiseAt(b) + 6) continue;
+                if (best < 0 || F[b] > F[best]) { third = second; second = best; best = b; }
+                else if (second < 0 || F[b] > F[second]) { third = second; second = b; }
+                else if (third < 0 || F[b] > F[third]) third = b;
+              }
+              if (best >= 0) break;
+            }
+            mic.ref[m] = best; mic.ref2[m] = second; mic.ref3[m] = third; mic.pk2[m] = -200; mic.drop2[m] = 0; mic.pMin[m] = 1e9; mic.pMax[m] = -1e9; mic.pN[m] = 0; mic.pk[m] = -200; mic.drop[m] = 0;
           } else if (soft) mic.softAt[m] = now;
         }
         // wrong octave? A key an octave away shares many of this key's overtones, so watch the ones it doesn't
         // share during the first 0.2 s after a strike (the attack's splash hides them at first).
         if (now - mic.onsetAt[m] <= 200) {
           if (mic.seen[m] < 255) mic.seen[m]++;
+          // a struck piano string holds its pitch; a speaking voice slides. Measure the exact pitch of the
+          // watched overtone (peak bin, refined by fitting a parabola) whenever it is clearly loud.
+          const rb = mic.ref[m];
+          // a piano note fades slowly after its strike; a syllable of speech collapses within a tenth of a second
+          if (rb > 0) {
+            if (L[rb] > mic.pk[m]) mic.pk[m] = L[rb];
+            else mic.drop[m] = Math.max(mic.drop[m], mic.pk[m] - L[rb]);
+          }
+          const rb2 = mic.ref2[m];
+          if (rb2 > 0) {
+            if (L[rb2] > mic.pk2[m]) mic.pk2[m] = L[rb2];
+            else mic.drop2[m] = Math.max(mic.drop2[m], mic.pk2[m] - L[rb2]);
+          }
+          if (rb >= 62 && L[rb] >= noiseAt(rb) + 12 && peaky(rb, 3)) {
+            const [i0, i1] = mic.bands[rb];
+            let i = i0;
+            for (let j = i0; j <= i1; j++) if (spec[j] > spec[i]) i = j;
+            const a = spec[i - 1], c = spec[i + 1], den = a - 2 * spec[i] + c;
+            const f = (i + (den < 0 ? 0.5 * (a - c) / den : 0)) * hz;
+            const cents = 1200 * Math.log2(f / (440 * Math.pow(2, (rb - 69) / 12)));
+            if (cents < mic.pMin[m]) mic.pMin[m] = cents;
+            if (cents > mic.pMax[m]) mic.pMax[m] = cents;
+            if (mic.pN[m] < 255) mic.pN[m]++;
+          }
           const lo = m - 12, ref = Math.max(lvl(m), lvl(m + 12), lvl(m + 19), lvl(m + 24));
           const tone = b => b >= BLO && b <= BHI && F[b] >= 6 && L[b] >= noiseAt(b) + S.tMargin && peaky(b, 4);
           const there = b => b > BHI || (L[b] >= noiseAt(b) + S.tMargin * 0.6 && peaky(b, 2));
@@ -602,20 +658,25 @@
       // --- match what was heard to the notes the song is waiting for
       const targets = micTargets();
       if (targets.length) {
-        const keep = drill || mode() === "practice" ? 700 : 250;
+        const keep = drill || mode() === "practice" ? 1200 : 250;
         // every note of the chord being played, including ones already heard, so C3 + C4 isn't mistaken for a lone C3
         const t0 = Math.min(...targets.map(n => n.start)), t1 = Math.max(...targets.map(n => n.start));
         const want = new Set(drill ? [drill.target.midi] : song.notes.filter(n => isUser(n) && n.start >= t0 - 1e-6 && n.start <= t1 + 1e-6).map(n => n.midi));
         const take = (n, from) => {
           const m = n.midi;
           mic.usedAt[m] = from;
+          const talkFilter = ui.ignoreTalk.checked && from === mic.onsetAt[m];
+          if (talkFilter && mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 35) return;   // pitch slid: a voice, not a piano
+          // its sound died away at once: speech, not a struck string
+          if (talkFilter && Math.max(mic.drop[m], mic.drop2[m]) > 15) return;
           if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] * 3 < mic.seen[m] && !want.has(m + 12))) return;   // wrong octave
           micHit(n, micPerfect(n, now - from)); mic.groupHitAt = now; mic.groupStart = n.start;
         };
         for (const n of targets) {
           const m = n.midi;
           const age = now - mic.onsetAt[m];
-          if (mic.onsetAt[m] > mic.usedAt[m] && age >= 120 && age <= keep + 120) take(n, mic.onsetAt[m]);
+          const wait = ui.ignoreTalk.checked ? 170 : 120;
+          if (mic.onsetAt[m] > mic.usedAt[m] && age >= wait && age <= keep + wait) take(n, mic.onsetAt[m]);
         }
         // the rest of a chord that was just heard: weaker evidence is enough for its other notes
         if (!drill && now - mic.groupHitAt <= keep) for (const n of micTargets()) {
@@ -651,6 +712,7 @@
     for (let m = 21; m <= 108; m++) train.keys.push(m);
     LOW = 21; HIGH = 108; layout();
     $("home").hidden = true; $("bar").classList.add("train"); $("title").textContent = "Train on my piano"; ui.hint.hidden = true;
+    ui.ready.hidden = true; ui.pause.hidden = true;
   }
   function trainTick(now) {
     const T = train, L = mic.L, F = mic.F;
@@ -801,8 +863,26 @@
         ctx.fillStyle = n.state === "miss" ? "#e2495b" : COLORS[n.hand];
         rrect(k.x + inset, yb - h, k.w - inset * 2, h, 5); ctx.fill();
         if (k.black) { ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.fill(); }
+        const bw = k.w - inset * 2;
+        if (user && bw >= 14 && h >= 18 && n.state !== "hit") {          // the note's name at the bottom of its bar
+          ctx.fillStyle = "rgba(255,255,255,.92)"; ctx.textAlign = "center";
+          ctx.font = `700 ${Math.max(9, Math.min(13, bw * 0.48))}px system-ui, sans-serif`;
+          ctx.fillText(bw >= 24 ? nm(n.midi) : NAMES[n.midi % 12], k.x + k.w / 2, yb - 6);
+        }
       }
       ctx.globalAlpha = 1;
+      // practice mode: say which notes it is waiting for
+      if (mode() === "practice" && state === "running") {
+        const g = nextGroup();
+        if (g.length && g[0].start - time < 0.02) {
+          const txt = "Play " + g.map(n => nm(n.midi)).join(" + ");
+          ctx.font = "700 20px system-ui, sans-serif";
+          const tw = ctx.measureText(txt).width + 32, cx = W / 2, cy = 34;
+          ctx.fillStyle = "rgba(27,30,42,.92)"; rrect(cx - tw / 2, cy - 22, tw, 40, 20); ctx.fill();
+          ctx.strokeStyle = "#5fd38a"; ctx.lineWidth = 2; ctx.stroke();
+          ctx.fillStyle = "#a8f0c0"; ctx.textAlign = "center"; ctx.fillText(txt, cx, cy + 5);
+        }
+      }
     }
     // keyboard
     ctx.fillStyle = "#0b0c11"; ctx.fillRect(0, kbTop - 3, W, H - kbTop + 3);
@@ -834,36 +914,41 @@
     if (train) drawTraining();
     // hit feedback
     const now = performance.now();
-    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "center";
     for (let i = flashes.length - 1; i >= 0; i--) {
-      const f = flashes[i], a = (now - f.t) / 600;
+      const f = flashes[i], a = (now - f.t) / 700;
       if (a >= 1 || f.midi < LOW || f.midi > HIGH) { flashes.splice(i, 1); continue; }
-      const k = keyOf(f.midi);
-      ctx.globalAlpha = 1 - a;
+      const k = keyOf(f.midi), pop = 1 + 0.25 * Math.max(0, 1 - a * 5);
+      ctx.globalAlpha = 1 - a * a;
+      ctx.font = `800 ${Math.round(18 * pop)}px system-ui, sans-serif`;
       ctx.fillStyle = f.text === "Perfect" ? "#8dffb0" : "#ffe08a";
-      ctx.fillText(f.text, k.x + k.w / 2, kbTop - 14 - a * 30);
+      ctx.fillText(f.text, k.x + k.w / 2, kbTop - 18 - a * 40);
+    }
+    if (streak >= 5 && streakAt && now - streakAt < 900) {
+      const a = (now - streakAt) / 900;
+      ctx.globalAlpha = 1 - a;
+      ctx.font = `800 ${Math.round(34 + 10 * (1 - a))}px system-ui, sans-serif`;
+      ctx.fillStyle = "#ffcc4d";
+      ctx.fillText(`🔥 ${streak} in a row`, W / 2, kbTop * 0.42);
     }
     ctx.globalAlpha = 1;
-    // microphone meter: shows that the app is hearing something, and which note
+    // microphone button: live level (how far the sound is above the room's background) and the note heard
     if (mic.on) {
-      // how far the sound is above the room's background, on a 0–40 dB scale
-      const above = (mic.db ?? -200) - (mic.roomDb ?? 0), lv = Math.max(0, Math.min(1, above / 40)), x = W - 176, y = 12;
-      ctx.fillStyle = "rgba(27,30,42,.9)"; rrect(x, y, 164, mic.filtered ? 50 : 34, 8); ctx.fill();
-      ctx.fillStyle = "#2c3042"; ctx.fillRect(x + 10, y + 22, 144, 5);
-      ctx.fillStyle = above > 6 ? "#5fd38a" : "#56607f"; ctx.fillRect(x + 10, y + 22, 144 * lv, 5);
-      ctx.font = "12px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.fillStyle = "#e8eaf2";
-      ctx.fillText(mic.note != null ? "Hearing: " + NAMES[mic.note % 12] + (Math.floor(mic.note / 12) - 1) : "Listening…", x + 10, y + 15);
-      if (mic.filtered) { ctx.fillStyle = "#ffc14d"; ctx.fillText("The device is filtering the mic", x + 10, y + 43); }
-      ctx.textAlign = "center";
-    }
+      const above = (mic.db ?? -200) - (mic.roomDb ?? 0), lv = Math.max(0, Math.min(1, above / 40));
+      ui.micLvl.style.width = (lv * 100).toFixed(1) + "%";
+      const t = mic.note != null ? "🎤 Hearing " + nm(mic.note) : "🎤 Listening";
+      if (ui.micText.textContent !== t) ui.micText.textContent = t;
+      ui.mic.classList.toggle("warn", !!mic.filtered);
+      ui.mic.title = mic.filtered ? "The device is filtering the microphone, which can hide soft notes" : "Listening to your piano. Tap to stop.";
+    } else if (ui.micLvl.style.width !== "0%") ui.micLvl.style.width = "0%";
+    ui.prog.style.width = song && !drill && !train ? Math.max(0, Math.min(100, time / song.end * 100)).toFixed(1) + "%" : "0%";
     // countdown / progress
     if (song && state !== "idle" && !train) {
       if (time < 0 && state === "running") {
         ctx.font = "bold 64px system-ui, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.25)";
         ctx.fillText(Math.ceil(-time), W / 2, kbTop / 2);
       }
-      ctx.fillStyle = "#2f8fd8";
-      ctx.fillRect(0, 0, W * Math.max(0, Math.min(1, time / song.end)), 3);
+
     }
   }
 
@@ -931,11 +1016,11 @@
             else if (cmd === 0x80 || cmd === 0x90) release(data[1]);
           };
         });
-        ui.midi.textContent = n ? `MIDI: ${n} connected` : "MIDI: none";
+        ui.midi.textContent = n ? "🎹 MIDI" : ""; ui.midi.hidden = !n; ui.midi.className = "stat midi";
       };
       hook(); access.onstatechange = hook;
-    }, () => { ui.midi.textContent = "MIDI: blocked"; });
-  } else ui.midi.textContent = "MIDI: unsupported";
+    }, () => {});
+  }
 
   // ---------- UI wiring ----------
   function refreshOptions() { ui.song.length = 0; SONGS.forEach((s, i) => ui.song.add(new Option(s.title, i))); }
@@ -977,11 +1062,11 @@
         const st = document.createElement("span"); st.className = "st";
         for (let k = 0; k < 3; k++) { const x = document.createElement("i"); x.textContent = "★"; if (k < stars) x.className = "on"; st.append(x); }
         b.append(t, by, st);
-        b.onclick = () => { ui.song.value = i; songChanged(); $("home").hidden = true; ui.hint.hidden = false; };
+        b.onclick = () => { ui.song.value = i; $("home").hidden = true; songChanged(); };
         grid.append(b);
       });
     }
-    $("home").hidden = false;
+    $("home").hidden = false; ui.ready.hidden = true; ui.pause.hidden = true;
   }
   $("back").onclick = showHome;
   $("drillBtn").onclick = startDrill;
@@ -1011,6 +1096,9 @@
   ui.mode.onchange = ui.hand.onchange = reset;
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";
   ui.start.onclick = toggle;
+  ui.pause.onclick = toggle;
+  try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
+  ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
   ui.mic.onclick = toggleMic;
   ui.restart.onclick = () => { reset(); start(); };
   $("again").onclick = () => { reset(); start(); };
