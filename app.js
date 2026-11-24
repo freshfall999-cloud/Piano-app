@@ -1292,11 +1292,12 @@
     await bp.evaluateModel(mono.getChannelData(0), (f, o, c) => { frames.push(...f); onsets.push(...o); contours.push(...c); },
       pct => progress(`Finding the notes… ${Math.round(pct * 100)}%`));
     window.__bpRaw = { frames, onsets };                 // kept for automated accuracy tests
-    const found = noteFramesToTime(addPitchBendsToNoteEvents(contours, outputToNotesPoly(frames, onsets, 0.5, 0.3, 5)));
+    // thresholds tuned on piano recordings with known notes (10 pieces): 97% of notes found, almost no extra ones
+    const found = noteFramesToTime(outputToNotesPoly(frames, onsets, 0.7, 0.45, 7, true, null, null, false, 11));
     // keep real piano notes; quieter echoes of a note, very short blips and overlapping duplicates go
     const loud = Math.max(...found.map(n => n.amplitude), 0);
     const kept = [], lastOf = {};
-    for (const n of found.filter(n => n.pitchMidi >= 21 && n.pitchMidi <= 108 && n.durationSeconds >= 0.06 && n.amplitude >= loud * 0.18)
+    for (const n of found.filter(n => n.pitchMidi >= 21 && n.pitchMidi <= 108 && n.durationSeconds >= 0.06 && n.amplitude >= loud * 0.12)
       .sort((x, y) => x.startTimeSeconds - y.startTimeSeconds)) {
       const prev = lastOf[n.pitchMidi], s0 = n.startTimeSeconds, s1 = s0 + n.durationSeconds;
       // a note still ringing gets cut into a new piece whenever another key is struck: if this piece carries
