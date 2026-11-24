@@ -341,6 +341,10 @@
     const lo = ui.dLedger.checked ? base - 4 : base, hi = ui.dLedger.checked ? base + 12 : base + 8;
     let step;
     do step = lo + Math.floor(Math.random() * (hi - lo + 1)); while (step === d.step && d.clef === d.lastClef);
+    if (window.__keyfallAsk && window.__keyfallAsk.length) {   // automated tests choose the question (natural notes)
+      const m = window.__keyfallAsk.shift();
+      step = (Math.floor(m / 12) - 1) * 7 + SEMI.indexOf(m % 12);
+    }
     const letter = step % 7, oct = Math.floor(step / 7);
     let acc = 0;
     if (ui.dAcc.checked && Math.random() < 0.35) {
@@ -1235,17 +1239,75 @@
   try { const v = localStorage.getItem("keyfall:sens"); if (SENS[v]) ui.sens.value = v; } catch (e) {}
   ui.sens.onchange = () => { try { localStorage.setItem("keyfall:sens", ui.sens.value); } catch (e) {} };
   ui.dClef.onchange = ui.dLedger.onchange = ui.dAcc.onchange = () => { if (drill) nextDrill(); };
+  // ---------- Recording → notes (Spotify's Basic Pitch, run on this device) ----------
+  const loadScript = src => new Promise((ok, fail) => {
+    const el = document.createElement("script");
+    el.src = src; el.onload = ok; el.onerror = () => fail(new Error("Couldn't load " + src));
+    document.head.append(el);
+  });
+  async function transcribe(file, progress) {
+    progress("Getting the note finder ready…");
+    if (!window.tf) await loadScript("vendor/tf.min.js");
+    if (!window.BasicPitchLib) await loadScript("vendor/basic-pitch/basic-pitch.js");
+    progress("Reading the recording…");
+    const data = await file.arrayBuffer(), ctx = audio();
+    const decoded = await new Promise((ok, fail) => {
+      const pr = ctx.decodeAudioData(data, ok, () => fail(new Error("decode")));
+      if (pr && pr.then) pr.then(ok, () => fail(new Error("decode")));
+    });
+    if (decoded.duration > 12 * 60) throw new Error("That recording is longer than 12 minutes. Try a shorter one.");
+    // the model listens at 22,050 samples a second, in mono
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(1, Math.ceil(decoded.duration * 22050), 22050), src = off.createBufferSource();
+    src.buffer = decoded; src.connect(off.destination); src.start();
+    const mono = await off.startRendering();
+    const { BasicPitch, outputToNotesPoly, addPitchBendsToNoteEvents, noteFramesToTime } = BasicPitchLib;
+    const bp = new BasicPitch("vendor/basic-pitch/model.json");
+    const frames = [], onsets = [], contours = [];
+    await bp.evaluateModel(mono.getChannelData(0), (f, o, c) => { frames.push(...f); onsets.push(...o); contours.push(...c); },
+      pct => progress(`Finding the notes… ${Math.round(pct * 100)}%`));
+    const found = noteFramesToTime(addPitchBendsToNoteEvents(contours, outputToNotesPoly(frames, onsets, 0.5, 0.3, 5)));
+    // keep real piano notes; quieter echoes of a note, very short blips and overlapping duplicates go
+    const loud = Math.max(...found.map(n => n.amplitude), 0);
+    const kept = [], lastOf = {};
+    for (const n of found.filter(n => n.pitchMidi >= 21 && n.pitchMidi <= 108 && n.durationSeconds >= 0.06 && n.amplitude >= loud * 0.18)
+      .sort((x, y) => x.startTimeSeconds - y.startTimeSeconds)) {
+      const prev = lastOf[n.pitchMidi], s0 = n.startTimeSeconds, s1 = s0 + n.durationSeconds;
+      // a note still ringing gets cut into a new piece whenever another key is struck: if this piece carries
+      // straight on from the same key and isn't louder, it's the same note, so join it back on
+      if (prev && prev.end >= s0 - 0.06 && (n.amplitude <= prev.amp * 0.9 || s0 - prev.start < 0.08)) { prev.end = Math.max(prev.end, s1); continue; }
+      const k = { midi: n.pitchMidi, start: s0, end: s1, amp: n.amplitude };
+      kept.push(k); lastOf[n.pitchMidi] = k;
+    }
+    let notes = kept.map(n => [n.midi, Math.round(n.start * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, +(n.midi < 60)]);
+    if (!notes.length) throw new Error("No piano notes were found in that recording.");
+    const t0 = notes[0][1];
+    notes.forEach(n => n[1] = Math.round((n[1] - t0) * 1000) / 1000);
+    return notes;
+  }
+
   $("file").onchange = async ev => {
     const f = ev.target.files[0], msg = $("importMsg");
     ev.target.value = "";
     if (!f) return;
+    const isMidi = /\.midi?$/i.test(f.name) || /midi/.test(f.type);
+    const title = f.name.replace(/\.[^.]+$/, "").slice(0, 60);
     try {
-      const notes = parseMidi(await f.arrayBuffer());
-      SONGS.push({ title: f.name.replace(/\.[^.]+$/, "").slice(0, 60), by: "Imported", level: "My songs", notes });
+      let notes;
+      if (isMidi) notes = parseMidi(await f.arrayBuffer());
+      else {
+        $("importBtn").classList.add("busy");
+        notes = await transcribe(f, t => { msg.textContent = t; });
+      }
+      SONGS.push({ title, by: isMidi ? "Imported" : "From a recording", level: "My songs", notes });
       saveImported(); refreshOptions();
-      msg.textContent = `Added “${SONGS[SONGS.length - 1].title}” (${notes.length} notes).`;
+      msg.textContent = `Added “${title}” (${notes.length} notes).`;
+      sfx("trained");
       showHome();
-    } catch (e) { msg.textContent = e.message && /MIDI|notes/.test(e.message) ? e.message : "Couldn't read that file. It needs to be a .mid file."; }
+    } catch (e) {
+      msg.textContent = e && /MIDI|notes|minutes|load/.test(e.message || "") ? e.message
+        : isMidi ? "Couldn't read that file. It needs to be a .mid file." : "Couldn't read that recording. Try an MP3, M4A or WAV file.";
+    } finally { $("importBtn").classList.remove("busy"); }
   };
   ui.mode.onchange = ui.hand.onchange = reset;
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";

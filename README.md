@@ -14,6 +14,8 @@ A piano practice app that runs in the browser with no build step: open `index.ht
 - **Note practice** – a note appears on the staff (treble, bass or both, optional ledger lines and sharps/flats) and you find it on the keyboard.
 - Input: computer keyboard (Z row = C3 octave, Q row = C4 upward), mouse/touch, or a MIDI keyboard.
 
-The song library screen lists the built-in songs by difficulty and shows your best star rating. **Add your own song** imports any `.mid` file (kept in the browser on that device).
+The song library screen lists the built-in songs by difficulty and shows your best star rating. **Add your own song** imports a `.mid` file, or a recording (MP3, M4A or WAV) of piano playing: recordings are turned into notes on the device with Spotify's [Basic Pitch](https://github.com/spotify/basic-pitch-ts) model, loaded only the first time it's needed. Imported songs are kept in the browser on that device.
+
+Third-party files: piano samples in `samples/` (Salamander Grand Piano, CC BY 3.0, see `samples/CREDITS.md`); `vendor/basic-pitch/` (Basic Pitch model and code, Apache 2.0) and `vendor/tf.min.js` (TensorFlow.js 3.21, Apache 2.0).
 
 Built-in songs live in `songs.js` as simple note strings and are all public-domain melodies.

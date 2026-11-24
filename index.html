@@ -104,12 +104,12 @@
     </label>
     <label class="sensrow"><input type="checkbox" id="sfx" checked> Sound effects</label>
     <label class="sensrow"><input type="checkbox" id="ignoreTalk" checked> Ignore talking (turn off if very short, staccato notes are missed)</label>
-    <label class="import">＋ Add your own song (MIDI file)
-      <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
+    <label class="import" id="importBtn">＋ Add your own song (MIDI file or MP3 recording)
+      <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi,.mp3,.m4a,.wav,.aac,audio/*" hidden>
     </label>
     <span id="importMsg"></span>
     <div id="list"></div>
-    <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0).</p>
+    <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0). Recordings are turned into notes on this device with Spotify's Basic Pitch (Apache 2.0).</p>
   </div>
 </div>
 <script src="sound.js"></script>
