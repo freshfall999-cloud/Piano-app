@@ -379,7 +379,7 @@
     sal: new Float32Array(130).fill(-200), hist: [],
     armed: new Uint8Array(128).fill(1), peak: new Float32Array(128), hitAt: new Float64Array(128),
     onsetAt: new Float64Array(128), softAt: new Float64Array(128), usedAt: new Float64Array(128),
-    lowEv: new Uint8Array(128), upTone: new Uint8Array(128), own: new Uint8Array(128), groupHitAt: 0, groupStart: null,
+    lowEv: new Uint8Array(128), upTone: new Uint8Array(128), own: new Uint8Array(128), seen: new Uint8Array(128), groupHitAt: 0, groupStart: null,
   };
   const nm = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
 
@@ -554,17 +554,18 @@
         }
         if (!mic.armed[m]) {                             // a struck key listens again once it fades a little
           if (level > mic.peak[m]) mic.peak[m] = level;
-          if (level < mic.peak[m] - 3 || now - mic.hitAt[m] > 400) mic.armed[m] = 1;
+          if ((now - mic.hitAt[m] > 100 && level < mic.peak[m] - 6) || now - mic.hitAt[m] > 400) mic.armed[m] = 1;
         }
         if (mic.armed[m]) {
           if (strict) {
             mic.onsetAt[m] = now; mic.armed[m] = 0; mic.peak[m] = level; mic.hitAt[m] = now;
-            mic.lowEv[m] = mic.upTone[m] = mic.own[m] = 0;
+            mic.lowEv[m] = mic.upTone[m] = mic.own[m] = mic.seen[m] = 0;
           } else if (soft) mic.softAt[m] = now;
         }
         // wrong octave? A key an octave away shares many of this key's overtones, so watch the ones it doesn't
         // share during the first 0.2 s after a strike (the attack's splash hides them at first).
         if (now - mic.onsetAt[m] <= 200) {
+          if (mic.seen[m] < 255) mic.seen[m]++;
           const lo = m - 12, ref = Math.max(lvl(m), lvl(m + 12), lvl(m + 19), lvl(m + 24));
           const tone = b => b >= BLO && b <= BHI && F[b] >= 6 && L[b] >= noiseAt(b) + S.tMargin && peaky(b, 4);
           const there = b => b > BHI || (L[b] >= noiseAt(b) + S.tMargin * 0.6 && peaky(b, 2));
@@ -574,7 +575,7 @@
           if (clear(lo) && clear(m + 7) && tone(lo) && tone(m + 7) && L[lo] >= ref - 15 && L[m + 7] >= ref - 25 && mic.lowEv[m] < 9) mic.lowEv[m]++;
           // octave above: the key above sounded, but this key's own fundamental and 3rd overtone never did
           if (m >= 36 && tone(m + 12) && visible(m) && visible(m + 19)) mic.upTone[m] = 1;
-          if ((there(m) || there(m + 19)) && mic.own[m] < 9) mic.own[m]++;   // seen over several frames, not a flicker
+          if ((there(m) || there(m + 19)) && mic.own[m] < 255) mic.own[m]++;   // counted per frame, so a flicker doesn't count
         }
       }
       // --- match what was heard to the notes the song is waiting for
@@ -587,7 +588,7 @@
         const take = (n, from) => {
           const m = n.midi;
           mic.usedAt[m] = from;
-          if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] < 3 && !want.has(m + 12))) return;   // wrong octave
+          if ((mic.lowEv[m] >= 2 && !want.has(m - 12)) || (mic.upTone[m] && mic.own[m] * 3 < mic.seen[m] && !want.has(m + 12))) return;   // wrong octave
           micHit(n, micPerfect(n, now - from)); mic.groupHitAt = now; mic.groupStart = n.start;
         };
         for (const n of targets) {
