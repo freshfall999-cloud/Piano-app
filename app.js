@@ -609,7 +609,17 @@
       const own = new Uint8Array(130);
       for (const o of HARM) for (let d = -1; d <= 1; d++) if (m + o + d < 130) own[m + o + d] = 1;
       for (let k = 40; k <= 110; k++) if (J[k] && !own[k]) n++;
-      return n >= 6;
+      if (n >= 6) return true;
+      // a soft strike's splash can be lost in the room's hiss; then its own main tones must leap sharply
+      // (by 6 dB within 80 ms: a re-strike does that, the slow swell of beating strings doesn't)
+      let leaps = 0, audible = 0;
+      for (const o of HARM.slice(0, 4)) {
+        const b = m + o;
+        if (b > BHI || L[b] < noiseAt(b) + 3) continue;
+        audible++;
+        if (FF[b] >= 5) leaps++;
+      }
+      return leaps >= Math.min(2, audible) && leaps > 0;
     };
 
     if (train) trainTick(now);
