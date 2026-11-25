@@ -17,3 +17,5 @@ Converted piano transcription models (PyTorch → ONNX, weights stored as 16-bit
   model's transformer as an ONNX graph that holds **no weights** (each weight refers by name to the tensor of the same
   name in the official, gated `model.safetensors`, which each user downloads with their own Hugging Face token), and
   the MT3 token vocabulary. The weights are CC BY-NC 4.0 and are never part of this repository.
+- `tkaug_*` — Transkun V2 Aug (Yujia Yan; MIT), the V2 checkpoint trained with data augmentation, from the author's
+  model card (github.com/Yujia-Yan/Transkun), converted the same way as `transkun_*` (its own analysis windows).

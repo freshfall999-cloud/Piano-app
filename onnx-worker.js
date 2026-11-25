@@ -140,9 +140,9 @@ function cbMean(logit) {                                   // mean of a continuo
   if (p > 0.499 && p < 0.501) { const x = p - 0.5; return 0.5 + (1 / 3 + 16 / 45 * x * x) * x; }
   return p / (2 * p - 1) + 1 / (Math.log1p(-p) - Math.log(p));
 }
-async function transkun(audio) {
-  const ctxS = await session("transkun_ctx", "Transkun model"), scoreS = await session("transkun_score"), attrS = await session("transkun_attr");
-  const wins = new Float32Array((await fetchBuf("models/transkun_windows.f32")).buffer.slice(0));
+async function transkun(audio, name = "transkun") {          // "transkun" (V2 as shipped) or "tkaug" (V2 Aug)
+  const ctxS = await session(name + "_ctx", "Transkun model"), scoreS = await session(name + "_score"), attrS = await session(name + "_attr");
+  const wins = new Float32Array((await fetchBuf("models/" + name + "_windows.f32")).buffer.slice(0));
   const mel = JSON.parse(new TextDecoder().decode(await fetchBuf("models/transkun_mel.json"))).mel;
   fft = fft || makeFFT(WIN);
   const padBegin = 8, padN = Math.ceil(padBegin * FS);
@@ -340,7 +340,7 @@ self.onmessage = async ({ data }) => {
     importScripts(base + "ort/ort.webgpu.min.js");
     ort.env.wasm.wasmPaths = base + "ort/";
     ort.env.wasm.numThreads = 1;                            // (several threads need a page setting GitHub Pages can't give)
-    const r = data.model === "transkun" ? await transkun(data.samples) : data.model === "sony" ? await sony(data.samples)
+    const r = data.model === "transkun" ? await transkun(data.samples) : data.model === "tkaug" ? await transkun(data.samples, "tkaug") : data.model === "sony" ? await sony(data.samples)
       : data.model === "qmul" ? await bytedance(data.samples, "qmul", "Queen Mary / Yamaha model") : await bytedance(data.samples);
     const { notes, pedal } = Array.isArray(r) ? { notes: r, pedal: null } : r;
     self.postMessage({ type: "done", notes, pedal, backend: providers && providers[0] });

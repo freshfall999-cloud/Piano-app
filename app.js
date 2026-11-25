@@ -1742,7 +1742,7 @@
       finally { freeBest(); }
     } else if (ONNX_MODELS[ui.finder.value]) {
       const m = ui.finder.value;
-      try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" ? 44100 : 16000), progress); }
+      try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" || m === "tkaug" ? 44100 : 16000), progress); }
       catch (e) { console.warn(m + " finder failed:", e); progress("That note finder didn't work on this device; using the standard one…"); }
     }
     if (ui.finder.value === "muscriptor") {
@@ -1837,12 +1837,12 @@
       .sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
   // Transkun or ByteDance's piano model, with ONNX Runtime in a worker (onnx-worker.js)
-  const ONNX_MODELS = { transkun: ["Transkun", 27], qmul: ["Queen Mary / Yamaha", 49], bytedance: ["ByteDance", 49], sony: ["Sony", 11] };
+  const ONNX_MODELS = { transkun: ["Transkun", 27], tkaug: ["Transkun V2 Aug", 27], qmul: ["Queen Mary / Yamaha", 49], bytedance: ["ByteDance", 49], sony: ["Sony", 11] };
   async function onnxNotes(model, samples, progress) {
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=2");
+      const wk = new Worker("onnx-worker.js?v=3");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
@@ -1947,7 +1947,7 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "muscriptor", "transkun", "bytedance", "qmul", "sony"].includes(v)) ui.finder.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "muscriptor", "transkun", "tkaug", "bytedance", "qmul", "sony", "demucs"].includes(v)) ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
   // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
   const MODEL_NOTES = {
@@ -1955,6 +1955,7 @@
     simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
     best: "Recommended for piano recordings. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
     transkun: "Solo piano recordings, most accurate in our tests: on 20 test recordings it found 99.4% of the notes with zero wrong ones. Slowest (a few minutes for a song) and downloads 27 MB the first time; it may be too heavy for older iPads. It ignores singing and drums, so use the Songs setting for those.",
+    tkaug: "Solo piano recordings made on a phone or in a room: Transkun V2 trained with data augmentation (many recording conditions). In its author's tests on pianos it never heard, it found more notes than the regular version (92% vs 88.5% of note starts). Slow, downloads 27 MB the first time.",
     qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
     sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
     bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
