@@ -1670,7 +1670,7 @@
       catch (e) { console.warn("best-quality finder failed:", e); progress("The best-quality finder didn't work on this device; using the standard one…"); }
       finally { freeBest(); }
     }
-    if (!kept) { const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress); }
+    if (!kept) { const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress, ui.finder.value === "song" ? { onset: 0.5, frame: 0.25 } : {}); }
     if (!kept.length) throw new Error("No piano notes were found in that recording.");
     assignHands(kept);
     const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp));
@@ -1710,7 +1710,7 @@
     try {
       // first choice: a worker, so the screen stays smooth
       notes = await new Promise((ok, fail) => {
-        const wk = new Worker("oaf-worker.js?v=1");
+        const wk = new Worker("oaf-worker.js?v=2");
         wk.onmessage = ({ data }) => {
           if (data.type === "progress") say(data.value);
           else { wk.terminate(); data.type === "done" ? ok(data.notes.map(([pitch, start, end, velocity]) => ({ pitch, start, end, velocity }))) : fail(new Error(data.message)); }
@@ -1731,17 +1731,17 @@
       .sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
   // Spotify's Basic Pitch, in a worker of its own (import-worker.js) so the screen stays smooth
-  async function standardNotes(samples, progress) {
+  async function standardNotes(samples, progress, tune) {
     progress("Finding the notes… 0%");
     const base = new URL("vendor/", location.href).href;
     const found = await new Promise((ok, fail) => {
-      const wk = new Worker("import-worker.js?v=1");
+      const wk = new Worker("import-worker.js?v=2");
       wk.onmessage = ({ data }) => {
         if (data.type === "progress") progress(`Finding the notes… ${Math.round(data.value * 100)}%`);
         else { wk.terminate(); if (data.type === "done") { if (data.raw) window.__bpRaw = data.raw; ok(data.notes); } else fail(new Error(data.message)); }
       };
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
-      wk.postMessage({ base, samples, keepRaw: !!window.__keepBpRaw });
+      wk.postMessage({ base, samples, keepRaw: !!window.__keepBpRaw, ...tune });
     });
     // keep real piano notes: very short blips and very quiet echoes go, and a key "struck" twice within 80 ms is one strike.
     // (The thresholds already split notes only at real strikes, so repeated notes stay separate.)
@@ -1792,14 +1792,15 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:finder"); if (v === "standard" || v === "best") ui.finder.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (v === "standard" || v === "best" || v === "song") ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
   // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
   const MODEL_NOTES = {
     ai: "Recommended. A trained AI model decides which keys you played, with extra checks so talking and echoes don't count. Small download the first time.",
     simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
-    best: "Recommended. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
-    standard: "Takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
+    best: "Recommended for piano recordings. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
+    song: "For songs with singing, guitar, drums or 808s (it hears every instrument, not just piano). Takes seconds. In our test song it found 30 of 32 sung notes and most of the guitar and bass. Expect some extra notes from the other instruments.",
+    standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
   };
   function showModelNotes() {
     $("listenerNote").textContent = MODEL_NOTES[ui.listener.value];

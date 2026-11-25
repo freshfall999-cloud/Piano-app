@@ -37,11 +37,12 @@ self.onmessage = async ({ data }) => {
       if (now - lastPost > 250) { lastPost = now; self.postMessage({ type: "progress", value: done / total }); }
     }
     model.dispose();
-    // notes from the model's guesses (thresholds tuned on piano recordings with known notes)
+    // notes from the model's guesses. Thresholds tuned on recordings with known notes: strict for solo piano,
+    // looser for full songs, where singing, guitar and 808 bass reach the model more faintly through the mix
     const F = [], O = [];
     for (let i = 0; i < done; i++) { F.push(frames.subarray(i * PITCHES, (i + 1) * PITCHES)); O.push(onsets.subarray(i * PITCHES, (i + 1) * PITCHES)); }
     const { outputToNotesPoly, noteFramesToTime } = BasicPitchLib;
-    const notes = noteFramesToTime(outputToNotesPoly(F, O, 0.7, 0.45, 7, true, null, null, false, 11))
+    const notes = noteFramesToTime(outputToNotesPoly(F, O, data.onset ?? 0.7, data.frame ?? 0.45, 7, true, null, null, false, 11))
       .map(n => [n.pitchMidi, n.startTimeSeconds, n.durationSeconds, n.amplitude]);
     self.postMessage({ type: "done", notes, raw: data.keepRaw ? { frames, onsets } : null });
   } catch (e) {
