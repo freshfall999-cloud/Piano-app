@@ -42,16 +42,23 @@ function halfToFloat(u8) {
   return f;
 }
 let providers = null;
+// on the graphics chip if the browser has one; if it fails there (at creation or while running), on the processor
 async function session(name, label) {
   const graph = await fetchBuf("models/" + name + ".onnx");
   const weights = halfToFloat(await fetchBuf("models/" + name + ".f16", label));
-  const opts = { externalData: [{ path: name + ".f32", data: new Uint8Array(weights.buffer) }], graphOptimizationLevel: "all" };
-  if (!providers) {                                        // the graphics chip if the browser offers it, else the processor
+  const create = eps => ort.InferenceSession.create(graph, { externalData: [{ path: name + ".f32", data: new Uint8Array(weights.buffer) }], graphOptimizationLevel: "all", executionProviders: eps });
+  if (!providers) {
     providers = ["wasm"];
     try { if (self.navigator.gpu && await navigator.gpu.requestAdapter()) providers = ["webgpu", "wasm"]; } catch (e) {}
   }
-  try { return await ort.InferenceSession.create(graph, { ...opts, executionProviders: providers }); }
-  catch (e) { if (providers[0] !== "webgpu") throw e; providers = ["wasm"]; return await ort.InferenceSession.create(graph, { ...opts, executionProviders: providers }); }
+  let onGpu = providers[0] === "webgpu", s;
+  try { s = await create(onGpu ? providers : ["wasm"]); } catch (e) { if (!onGpu) throw e; onGpu = false; s = await create(["wasm"]); }
+  return {
+    async run(feeds) {
+      try { return await s.run(feeds); }
+      catch (e) { if (!onGpu) throw e; console.warn(name + ": graphics chip failed, using the processor:", e); onGpu = false; providers = ["wasm"]; s = await create(["wasm"]); return await s.run(feeds); }
+    },
+  };
 }
 const pause = () => new Promise(r => setTimeout(r, 0));
 

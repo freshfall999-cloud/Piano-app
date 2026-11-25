@@ -1796,7 +1796,7 @@
   async function demucsPiano(left, right, progress) {
     progress("Getting Demucs ready (55 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=4");
+      const wk = new Worker("onnx-worker.js?v=5");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading Demucs… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") progress(`Pulling the piano out of the song with Demucs… ${Math.round(data.value * 100)}%`);
@@ -1866,7 +1866,7 @@
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=4");
+      const wk = new Worker("onnx-worker.js?v=5");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
@@ -1902,7 +1902,7 @@
   async function ymt3Notes(s16, s22, progress) {
     progress("Getting YourMT3+ ready (95 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("ymt3-worker.js?v=1");
+      const wk = new Worker("ymt3-worker.js?v=2");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") {
@@ -1990,8 +1990,11 @@
       showHome();
     } catch (e) {
       console.warn("import failed:", e);
-      msg.textContent = e && /MIDI|notes|minutes|load|Hugging Face/.test(e.message || "") ? e.message
-        : isMidi ? "Couldn't read that file. It needs to be a .mid file." : "Couldn't read that recording. Try an MP3, M4A or WAV file.";
+      const m = (e && e.message) || "";
+      msg.textContent = /MIDI|notes|minutes|load|Hugging Face/.test(m) ? m
+        : isMidi ? "Couldn't read that file. It needs to be a .mid file."
+        : m === "decode" ? "Couldn't read that recording. Try an MP3, M4A or WAV file."
+        : "That note finder ran into a problem (" + m.slice(0, 160) + "). Try another “MP3 → notes” choice, and tell Claude what it said.";
     } finally { $("importBtn").classList.remove("busy"); }
   };
   ui.mode.onchange = reset;

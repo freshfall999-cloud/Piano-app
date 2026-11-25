@@ -58,15 +58,24 @@ async function fetchBuf(path, label) {
 }
 const F16 = (() => { const t = new Float32Array(65536); for (let h = 0; h < 65536; h++) { const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;
   t[h] = e === 0 ? s * m * 2 ** -24 : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 1024) * 2 ** (e - 15); } return t; })();
-let providers = null;
-async function session(name, label) {
+let gpuOk = null;
+// A session that runs on the graphics chip when it can, and moves to the processor for good if the graphics chip
+// fails (ONNX Runtime's WebGPU can't run every step, e.g. an expert layer that gets no input).
+async function session(name, label, processorOnly = false) {
   const graph = await fetchBuf("models/" + name + ".onnx");
   const h16 = await fetchBuf("models/" + name + ".f16", label), h = new Uint16Array(h16.buffer, h16.byteOffset, h16.byteLength >> 1);
   const w = new Float32Array(h.length); for (let i = 0; i < h.length; i++) w[i] = F16[h[i]];
-  const opts = { externalData: [{ path: name + ".f32", data: new Uint8Array(w.buffer) }], graphOptimizationLevel: "all" };
-  if (!providers) { providers = ["wasm"]; try { if (self.navigator.gpu && await navigator.gpu.requestAdapter()) providers = ["webgpu", "wasm"]; } catch (e) {} }
-  try { return await ort.InferenceSession.create(graph, { ...opts, executionProviders: providers }); }
-  catch (e) { if (providers[0] !== "webgpu") throw e; providers = ["wasm"]; return await ort.InferenceSession.create(graph, { ...opts, executionProviders: providers }); }
+  const create = eps => ort.InferenceSession.create(graph, { externalData: [{ path: name + ".f32", data: new Uint8Array(w.buffer) }], graphOptimizationLevel: "all", executionProviders: eps });
+  if (gpuOk === null) { gpuOk = false; try { gpuOk = !!(self.navigator.gpu && await navigator.gpu.requestAdapter()); } catch (e) {} }
+  let onGpu = gpuOk && !processorOnly, s;
+  try { s = await create(onGpu ? ["webgpu", "wasm"] : ["wasm"]); } catch (e) { if (!onGpu) throw e; onGpu = false; s = await create(["wasm"]); }
+  return {
+    get backend() { return onGpu ? "webgpu" : "wasm"; },
+    async run(feeds) {
+      try { return await s.run(feeds); }
+      catch (e) { if (!onGpu) throw e; console.warn(name + ": graphics chip failed, using the processor:", e); onGpu = false; s = await create(["wasm"]); return await s.run(feeds); }
+    },
+  };
 }
 
 // ---------- greedy decoding of the 13 instrument channels of one piece (as ort_infer.decode_batch) ----------
@@ -214,7 +223,8 @@ self.onmessage = async ({ data }) => {
     importScripts(base + "ort/ort.webgpu.min.js");
     ort.env.wasm.wasmPaths = base + "ort/"; ort.env.wasm.numThreads = 1;
     const meta = await (await fetch(base + "models/ymt3_vocab.json")).json();
-    const enc = await session("ymt3_encoder", "YourMT3+ model (1 of 2)"), step = await session("ymt3_decoder", "YourMT3+ model (2 of 2)");
+    // the encoder on the processor (its expert layers trip up WebGPU); the step-by-step decoder on the graphics chip if there is one
+    const enc = await session("ymt3_encoder", "YourMT3+ model (1 of 2)", true), step = await session("ymt3_decoder", "YourMT3+ model (2 of 2)");
     const audio = data.samples, n = Math.max(1, Math.ceil(audio.length / SEG)), rows = [];
     const t0 = performance.now();
     for (let i = 0; i < n; i++) {
@@ -229,7 +239,7 @@ self.onmessage = async ({ data }) => {
     notes = tidy(notes);                                     // mix_notes
     const out = notes.map(nn => [nn.pitch, nn.onset, nn.offset, nn.drum ? -1 : nn.program]);
     const flux = data.samples22 ? fluxOf(data.samples22) : null;
-    self.postMessage({ type: "done", notes: out, programs: meta.programs, tokens: data.keepTokens ? rows : null, flux, backend: providers && providers[0] });
+    self.postMessage({ type: "done", notes: out, programs: meta.programs, tokens: data.keepTokens ? rows : null, flux, backend: step.backend });
   } catch (e) {
     self.postMessage({ type: "error", message: String(e && (e.message || e)) });
   }
