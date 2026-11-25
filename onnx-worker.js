@@ -1,6 +1,9 @@
-// Two more piano note finders, run with ONNX Runtime Web in a background worker:
-//  · ByteDance's "high-resolution piano transcription" (Kong et al. 2020, Apache 2.0)
+// More piano note finders, run with ONNX Runtime Web in a background worker:
+//  · ByteDance's "high-resolution piano transcription" (Kong et al. 2020, Apache 2.0; weights CC BY 4.0)
+//  · the same network re-trained by Queen Mary University of London and Yamaha for other pianos and rooms
+//    (Edwards, Dixon, Benetos, Maezawa & Kusaka 2024; weights CC BY 4.0)
 //  · Transkun (Yujia Yan & Zhiyao Duan, MIT)
+//  · Sony's hFT-Transformer (Toyama et al. 2023; code MIT, weights CC BY-NC-SA 4.0: non-commercial use)
 // The models were converted from PyTorch to ONNX; their weights are stored as 16-bit floats (half the download)
 // and turned back into 32-bit floats here. Everything around the networks (cutting the song into pieces,
 // the spectrum Transkun listens to, turning the networks' output into notes) follows the original Python code.
@@ -52,8 +55,8 @@ async function session(name, label) {
 const pause = () => new Promise(r => setTimeout(r, 0));
 
 // ---------- ByteDance: 10-second pieces, half overlapping; regression outputs → notes ----------
-async function bytedance(audio) {
-  const s = await session("bytedance", "ByteDance model");
+async function bytedance(audio, name = "bytedance", label = "ByteDance model") {
+  const s = await session(name, label);
   const SEG = 160000, len = audio.length, padded = Math.ceil(len / SEG) * SEG;
   const x = new Float32Array(padded); x.set(audio);
   const starts = []; for (let p = 0; p + SEG <= padded; p += SEG / 2) starts.push(p);
@@ -254,13 +257,88 @@ async function transkun(audio) {
   return all.filter(n => n.start < n.end).map(n => [n.pitch, n.start, n.end, n.vel]);
 }
 
+// ---------- Sony hFT-Transformer: log-mel frames (16 ms) in blocks of 128 with 32 frames of context each side ----------
+async function sony(audio) {
+  const s = await session("sony", "Sony model");
+  const mel = JSON.parse(new TextDecoder().decode(await fetchBuf("models/sony_mel.json"))).mel;
+  const N = 2048, H = 256, NBIN = N / 2 + 1, MB = 256, P = 88, hopSec = H / 16000;
+  const f = makeFFT(N), win = new Float64Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);     // periodic Hann, as PyTorch makes it
+  // centred frames: half a window of silence on each side
+  const x = new Float32Array(audio.length + N); x.set(audio, N / 2);
+  const F = 1 + Math.floor(audio.length / H), feat = new Float32Array(F * MB);
+  const re = new Float64Array(N), im = new Float64Array(N), pw = new Float64Array(NBIN);
+  for (let t = 0; t < F; t++) {
+    for (let j = 0; j < N; j++) { re[j] = x[t * H + j] * win[j]; im[j] = 0; }
+    f(re, im);
+    for (let k = 0; k < NBIN; k++) pw[k] = re[k] * re[k] + im[k] * im[k];
+    for (let m = 0; m < MB; m++) { const [lo, w] = mel[m]; let a = 0; for (let q = 0; q < w.length; q++) a += pw[lo + q] * w[q]; feat[t * MB + m] = Math.log(a + 1e-8); }
+    if (t % 2000 === 0) await pause();
+  }
+  const MIN = Math.fround(Math.log(1e-8)), BLK = 128, MAR = 32, W = BLK + 2 * MAR;
+  const L = Math.ceil(F / BLK) * BLK, rows = MAR + L + MAR;
+  const inp = new Float32Array(rows * MB).fill(MIN); inp.set(feat, MAR * MB);
+  const on = new Float32Array(L * P), off = new Float32Array(L * P), mpe = new Float32Array(L * P), vel = new Float32Array(L * P);
+  const spec = new Float32Array(MB * W);
+  for (let i = 0; i < F; i += BLK) {
+    for (let r = 0; r < W; r++) for (let b = 0; b < MB; b++) spec[b * W + r] = inp[(i + r) * MB + b];
+    const o = await s.run({ spec: new ort.Tensor("float32", spec, [1, MB, W]) });
+    on.set(o.onset.data, i * P); off.set(o.offset.data, i * P); mpe.set(o.frame.data, i * P); vel.set(o.velocity.data, i * P);
+    say("progress", Math.min(1, (i + BLK) / F));
+    await pause();
+  }
+  // notes: peaks of the onset curve (with sub-frame timing), ended by the offset curve or the frame curve, whichever is first
+  const T = L, notes = [];
+  const peaks = (a, j) => {
+    const out = [];
+    for (let i = 0; i < T; i++) {
+      const v = a[i * P + j];
+      if (v < 0.5) continue;
+      let left = true, right = true;
+      for (let ii = i - 1; ii >= 0; ii--) { const u = a[ii * P + j]; if (v > u) { left = true; break; } if (v < u) { left = false; break; } }
+      for (let ii = i + 1; ii < T; ii++) { const u = a[ii * P + j]; if (v > u) { right = true; break; } if (v < u) { right = false; break; } }
+      if (!left || !right) continue;
+      let time = i * hopSec;
+      if (i > 0 && i < T - 1) {
+        const pv = a[(i - 1) * P + j], nx = a[(i + 1) * P + j];
+        if (pv > nx) time = i * hopSec - hopSec * 0.5 * (pv - nx) / (v - nx);
+        else if (pv < nx) time = i * hopSec + hopSec * 0.5 * (nx - pv) / (v - pv);
+      }
+      out.push({ loc: i, time });
+    }
+    return out;
+  };
+  for (let j = 0; j < P; j++) {
+    const ons = peaks(on, j), offs = peaks(off, j), mine = [];
+    let tOff = 0, tMpe = 0;
+    ons.forEach((o, k) => {
+      const locNext = k + 1 < ons.length ? ons[k + 1].loc : T, tNext = k + 1 < ons.length ? ons[k + 1].time : (T - 1) * hopSec;
+      let locOff = o.loc + 1, hasOff = false;
+      for (const q of offs) if (o.loc < q.loc) { locOff = q.loc; tOff = q.time; hasOff = true; break; }
+      if (locOff > locNext) { locOff = locNext; tOff = tNext; }
+      let locMpe = o.loc + 1, hasMpe = false;
+      for (let ii = o.loc + 1; ii < locNext; ii++) if (mpe[ii * P + j] < 0.5) { locMpe = ii; hasMpe = true; tMpe = ii * hopSec; break; }
+      const v = Math.trunc(vel[o.loc * P + j]);
+      const end = !hasOff && !hasMpe ? tNext : hasOff && !hasMpe ? tOff : !hasOff ? tMpe : locOff <= locMpe ? tOff : tMpe;
+      if (v > 0) {
+        mine.push([j + 21, o.time, end, v]);
+        const a = mine[mine.length - 2], b = mine[mine.length - 1];
+        if (a && b[1] < a[2]) a[2] = b[1];
+      }
+    });
+    notes.push(...mine);
+  }
+  return notes.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+}
+
 self.onmessage = async ({ data }) => {
   try {
     base = data.base;
     importScripts(base + "ort/ort.webgpu.min.js");
     ort.env.wasm.wasmPaths = base + "ort/";
     ort.env.wasm.numThreads = 1;                            // (several threads need a page setting GitHub Pages can't give)
-    const notes = data.model === "transkun" ? await transkun(data.samples) : await bytedance(data.samples);
+    const notes = data.model === "transkun" ? await transkun(data.samples) : data.model === "sony" ? await sony(data.samples)
+      : data.model === "qmul" ? await bytedance(data.samples, "qmul", "Queen Mary / Yamaha model") : await bytedance(data.samples);
     self.postMessage({ type: "done", notes, backend: providers && providers[0] });
   } catch (e) {
     self.postMessage({ type: "error", message: String(e && (e.stack || e.message) || e) });

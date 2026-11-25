@@ -1669,7 +1669,7 @@
       try { kept = await bestNotes(await resample(decoded, 16000), progress); }
       catch (e) { console.warn("best-quality finder failed:", e); progress("The best-quality finder didn't work on this device; using the standard one…"); }
       finally { freeBest(); }
-    } else if (ui.finder.value === "transkun" || ui.finder.value === "bytedance") {
+    } else if (ONNX_MODELS[ui.finder.value]) {
       const m = ui.finder.value;
       try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" ? 44100 : 16000), progress); }
       catch (e) { console.warn(m + " finder failed:", e); progress("That note finder didn't work on this device; using the standard one…"); }
@@ -1735,11 +1735,12 @@
       .sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
   // Transkun or ByteDance's piano model, with ONNX Runtime in a worker (onnx-worker.js)
+  const ONNX_MODELS = { transkun: ["Transkun", 27], qmul: ["Queen Mary / Yamaha", 49], bytedance: ["ByteDance", 49], sony: ["Sony", 11] };
   async function onnxNotes(model, samples, progress) {
-    const name = model === "transkun" ? "Transkun" : "ByteDance";
-    progress(`Getting the ${name} note finder ready (${model === "transkun" ? "27" : "49"} MB, only the first time)…`);
+    const [name, mb] = ONNX_MODELS[model];
+    progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=1");
+      const wk = new Worker("onnx-worker.js?v=2");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
@@ -1814,7 +1815,7 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "transkun", "bytedance"].includes(v)) ui.finder.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "transkun", "bytedance", "qmul", "sony"].includes(v)) ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
   // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
   const MODEL_NOTES = {
@@ -1822,6 +1823,8 @@
     simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
     best: "Recommended for piano recordings. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
     transkun: "Solo piano recordings, most accurate in our tests: found every note of our hardest test recordings with no wrong ones. Slowest (a few minutes for a song) and downloads 27 MB the first time; it may be too heavy for older iPads. It ignores singing and drums, so use the Songs setting for those.",
+    qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes. Slow, downloads 49 MB the first time.",
+    sony: "Solo piano recordings: Sony's hFT-Transformer. Found almost every note in our tests but added some octave echoes. The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
     bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found almost every note in our tests but added some octave echoes. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
     song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
     standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
