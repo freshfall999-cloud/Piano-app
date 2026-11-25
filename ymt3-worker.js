@@ -47,13 +47,23 @@ function spectrogram(seg) {
 
 // ---------- loading (weights stored as 16-bit floats) ----------
 async function fetchBuf(path, label) {
+  // GitHub Pages sends these files compressed: the size it reports is the compressed one, and the bytes that
+  // arrive (already unpacked by the browser) are more. So collect whatever arrives instead of trusting that size.
   const r = await fetch(base + path);
   if (!r.ok) throw new Error("couldn't download " + path);
-  const total = +r.headers.get("content-length") || 0;
-  if (!total || !r.body) return new Uint8Array(await r.arrayBuffer());
-  const out = new Uint8Array(total), rd = r.body.getReader(); let got = 0, last = 0;
-  for (;;) { const { done, value } = await rd.read(); if (done) break; out.set(value, got); got += value.length;
-    if (label && performance.now() - last > 300) { last = performance.now(); say("download", { label, f: got / total }); } }
+  const size = +r.headers.get("content-length") || 0, packed = !!r.headers.get("content-encoding");
+  if (!r.body) return new Uint8Array(await r.arrayBuffer());
+  const rd = r.body.getReader(), parts = [];
+  let got = 0, last = 0;
+  for (;;) {
+    const { done, value } = await rd.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+    if (label && performance.now() - last > 300) { last = performance.now(); say("download", { label, f: size && !packed ? Math.min(1, got / size) : null, mb: got / 1e6 }); }
+  }
+  if (parts.length === 1) return parts[0];
+  const out = new Uint8Array(got); let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
   return out;
 }
 const F16 = (() => { const t = new Float32Array(65536); for (let h = 0; h < 65536; h++) { const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;

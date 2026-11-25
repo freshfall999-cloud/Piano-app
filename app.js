@@ -1795,9 +1795,9 @@
   async function demucsPiano(left, right, progress) {
     progress("Getting Demucs ready (55 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=5");
+      const wk = new Worker("onnx-worker.js?v=6");
       wk.onmessage = ({ data }) => {
-        if (data.type === "download") progress(`Downloading Demucs… ${Math.round(data.value.f * 100)}% (only the first time)`);
+        if (data.type === "download") progress(`Downloading Demucs… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Pulling the piano out of the song with Demucs… ${Math.round(data.value * 100)}%`);
         else { wk.terminate(); data.type === "done" ? ok(data.piano) : fail(new Error(data.message)); }
       };
@@ -1883,9 +1883,9 @@
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=5");
+      const wk = new Worker("onnx-worker.js?v=6");
       wk.onmessage = ({ data }) => {
-        if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
+        if (data.type === "download") progress(`Downloading the ${data.value.label}… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
         else { wk.terminate(); data.type === "done" ? ok(data) : fail(new Error(data.message)); }
       };
@@ -1919,9 +1919,9 @@
   async function ymt3Notes(s16, s22, progress) {
     progress("Getting YourMT3+ ready (95 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("ymt3-worker.js?v=2");
+      const wk = new Worker("ymt3-worker.js?v=3");
       wk.onmessage = ({ data }) => {
-        if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
+        if (data.type === "download") progress(`Downloading the ${data.value.label}… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") {
           const { piece, pieces, secs } = data.value, left = Math.round(secs / piece * (pieces - piece) / 60);
           progress(`Writing out every instrument with YourMT3+… ${Math.round(piece / pieces * 100)}% (about ${left < 1 ? 1 : left} min left)`);
@@ -1937,7 +1937,7 @@
   async function muscNotes(s16, s22, token, progress) {
     progress("Getting MuScriptor ready…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("musc-worker.js?v=1");
+      const wk = new Worker("musc-worker.js?v=2");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading MuScriptor… ${Math.round(data.value * 100)}% (412 MB, only the first time)`);
         else if (data.type === "status") progress(data.value === "download" ? "Getting MuScriptor (412 MB the first time, then it's kept on this iPad)…" : data.value === "load" ? "Loading MuScriptor…" : "Writing out every instrument…");

@@ -35,7 +35,7 @@ async function download(url, token, cacheName) {
   let got = 0, last = 0;
   const count = new TransformStream({ transform(chunk, ctl) {
     got += chunk.length; ctl.enqueue(chunk);
-    if (performance.now() - last > 400) { last = performance.now(); say("download", total ? got / total : 0); }
+    if (performance.now() - last > 400) { last = performance.now(); say("download", total ? Math.min(1, got / total) : 0); }
   } });
   const body = r.body.pipeThrough(count);
   if (cache) {
@@ -44,9 +44,13 @@ async function download(url, token, cacheName) {
       const back = await cache.match(url); if (back) return await back.arrayBuffer();
     } catch (e) { throw new Error("couldn't store the model on this device (" + (e.message || e) + ")"); }
   }
-  // no storage: read it into one buffer
-  const out = new Uint8Array(total || 450e6), rd = body.getReader(); let at = 0;
-  for (;;) { const { done, value } = await rd.read(); if (done) break; out.set(value, at); at += value.length; }
+  // no storage: read it into one buffer (growing as needed: the reported size can be a compressed one)
+  let out = new Uint8Array(total || 420e6), at = 0; const rd = body.getReader();
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    if (at + value.length > out.length) { const bigger = new Uint8Array(Math.max(out.length * 1.25, at + value.length)); bigger.set(out.subarray(0, at)); out = bigger; }
+    out.set(value, at); at += value.length;
+  }
   return out.buffer.slice(0, at);
 }
 
