@@ -5,7 +5,8 @@
 //  · Transkun (Yujia Yan & Zhiyao Duan, MIT)
 //  · Sony's hFT-Transformer (Toyama et al. 2023; code MIT, weights CC BY-NC-SA 4.0: non-commercial use)
 // The models were converted from PyTorch to ONNX; their weights are stored as 16-bit floats (half the download)
-// and turned back into 32-bit floats here. Everything around the networks (cutting the song into pieces,
+// and turned back into 32-bit floats here. The note-processing code below is a JavaScript port of each project's
+// Python code (ByteDance: Apache 2.0; Transkun and Sony's hFT-Transformer: MIT); see THIRD_PARTY_NOTICES.md. Everything around the networks (cutting the song into pieces,
 // the spectrum Transkun listens to, turning the networks' output into notes) follows the original Python code.
 /* global ort */
 let base = "";
@@ -175,7 +176,7 @@ async function transkun(audio) {
     // best set of non-overlapping notes for each key (semi-Markov Viterbi, scored backwards from the end)
     const paths = new Array(PITCH.length);
     const CHUNK = 10;
-    for (let s0 = 2; s0 < PITCH.length; s0 += CHUNK) {
+    for (let s0 = 0; s0 < PITCH.length; s0 += CHUNK) {
       const n = Math.min(CHUNK, PITCH.length - s0);
       const part = new ort.Tensor("float32", C.subarray(s0 * T * D, (s0 + n) * T * D), [1, n, T, D]);
       const { score } = await scoreS.run({ ctx: part });
@@ -204,7 +205,7 @@ async function transkun(audio) {
     }
     // loudness and exact start/end of every interval, from the features at its two ends
     const list = [];
-    for (let s = 2; s < PITCH.length; s++) for (const iv of paths[s]) list.push([s, iv[0], iv[1]]);
+    for (let s = 0; s < PITCH.length; s++) if (s !== 1) for (const iv of paths[s]) list.push([s, iv[0], iv[1]]);   // keys, and the sustain pedal (not the soft pedal)
     let vel = [], of = [];
     if (list.length) {
       const inp = new Float32Array(list.length * 3 * D);
@@ -218,7 +219,8 @@ async function transkun(audio) {
     ctx.dispose && ctx.dispose();
     const next = new Array(PITCH.length).fill(0), events = [];
     let r = 0;
-    for (let s = 2; s < PITCH.length; s++) {
+    for (let s = 0; s < PITCH.length; s++) {
+      if (s === 1) continue;
       let lastEnd = 0, lastP = 0;
       for (const [a, b] of paths[s]) {
         let v = 0, vb = -Infinity;
@@ -254,7 +256,8 @@ async function transkun(audio) {
   all = all.filter(n => n.hasOff).sort((a, b) => a.start - b.start || a.end - b.end || a.pitch - b.pitch);
   const lastOf = new Map();                                 // a key can't sound twice at once
   all.forEach((n, i) => { const j = lastOf.get(n.pitch); if (j !== undefined && all[j].end > n.start) all[j].end = n.start; lastOf.set(n.pitch, i); });
-  return all.filter(n => n.start < n.end).map(n => [n.pitch, n.start, n.end, n.vel]);
+  all = all.filter(n => n.start < n.end);
+  return { notes: all.filter(n => n.pitch > 0).map(n => [n.pitch, n.start, n.end, n.vel]), pedal: all.filter(n => n.pitch === -64).map(n => [n.start, n.end]) };
 }
 
 // ---------- Sony hFT-Transformer: log-mel frames (16 ms) in blocks of 128 with 32 frames of context each side ----------
@@ -337,9 +340,10 @@ self.onmessage = async ({ data }) => {
     importScripts(base + "ort/ort.webgpu.min.js");
     ort.env.wasm.wasmPaths = base + "ort/";
     ort.env.wasm.numThreads = 1;                            // (several threads need a page setting GitHub Pages can't give)
-    const notes = data.model === "transkun" ? await transkun(data.samples) : data.model === "sony" ? await sony(data.samples)
+    const r = data.model === "transkun" ? await transkun(data.samples) : data.model === "sony" ? await sony(data.samples)
       : data.model === "qmul" ? await bytedance(data.samples, "qmul", "Queen Mary / Yamaha model") : await bytedance(data.samples);
-    self.postMessage({ type: "done", notes, backend: providers && providers[0] });
+    const { notes, pedal } = Array.isArray(r) ? { notes: r, pedal: null } : r;
+    self.postMessage({ type: "done", notes, pedal, backend: providers && providers[0] });
   } catch (e) {
     self.postMessage({ type: "error", message: String(e && (e.stack || e.message) || e) });
   }

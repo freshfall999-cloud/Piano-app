@@ -172,3 +172,4 @@ button.primary:hover { background: linear-gradient(#63c0ff, #2b86e0); }
 .mrow > span { min-width: 170px; color: #d6deee; }
 .mrow select { flex: 1 1 220px; min-width: 0; }
 .mnote { margin: 6px 0 12px; color: #9fb0cc; font-size: 13px; }
+.credit a { color: #8fb4e8; }

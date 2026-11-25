@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -110,13 +110,13 @@
     return t;
   }
   function loadSong(def, level = "hard") {
-    let notes = [], beat = 60 / def.bpm, bars = [], end;
+    let notes = [], beat = 60 / def.bpm, bars = [], end, cut = t => t;
     if (def.notes) {                     // imported song: [midi, start, duration, isLeft, loudness]
       for (const [midi, start, dur, left, amp] of def.notes)
         notes.push({ midi, start, dur, amp, hand: left ? "left" : "right", state: "pending", played: false });
       notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
       beat = guessBeat(notes);
-      closeGaps(notes, beat);
+      cut = closeGaps(notes, beat);
       end = Math.max(...notes.map(n => n.start + n.dur));
       for (let t = 0; t < end; t += beat * 4) bars.push(t);
     } else {
@@ -129,19 +129,40 @@
     notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
     // if both hands strike the same key at the same moment, keep one note
     const uniq = notes.filter((n, i) => !(i && notes[i - 1].midi === n.midi && Math.abs(notes[i - 1].start - n.start) < 1e-6));
-    if (def.notes) letRing(uniq, beat);
-    return { def, notes: uniq, end, beat, bars: bars.filter(b => b > 0.01 && b < end - 0.01) };
+    const barList = bars.filter(b => b > 0.01 && b < end - 0.01);
+    const pedal = ui.pedal.value === "off" ? [] : pedalOf(def, barList, end, beat, cut);
+    // a recording without pedal marks: let its notes ring on to the next one instead
+    if (def.notes && !(def.pedal && def.pedal.length)) letRing(uniq, beat);
+    return { def, notes: uniq, end, beat, bars: barList, pedal };
+  }
+  // When the sustain pedal is down: [[down, up], ...] in song time. From the file (MIDI pedal, or the pedal
+  // Transkun hears in a recording), or for built-in pieces that are played with pedal: re-pedalled every bar
+  // (or every beat), lifted at each bar line and pressed again just after the new bass note.
+  function pedalOf(def, bars, end, beat, cut) {
+    if (Array.isArray(def.pedal)) return def.pedal.map(([a, b]) => [cut(a), cut(b)]).filter(([a, b]) => b > a + 0.05);
+    if (!def.pedal) return [];
+    const edges = def.pedal === "beat" ? Array.from({ length: Math.ceil(end / beat) }, (_, i) => i * beat) : [0, ...bars];
+    const out = [];
+    edges.forEach((t, i) => {
+      if (def.pedalSkip && def.pedalSkip.includes(i)) return;
+      const next = i + 1 < edges.length ? edges[i + 1] : end + 1.5;
+      out.push([t + 0.04, next]);
+    });
+    return out;
   }
   // A recording can go quiet for a while (a long pause, a silent stretch, notes the finder couldn't hear):
   // shorten any silence longer than 4 beats (at least 2.5 s) to 2 beats, so the song doesn't stop dead.
   function closeGaps(notes, beat) {
-    const long = Math.max(2.5, beat * 4);
+    const long = Math.max(2.5, beat * 4), cuts = [];
     let shift = 0, prev = null;
     for (const n of notes) {
       const s = n.start;
-      if (prev !== null && s - prev > long) shift += s - prev - beat * 2;
+      if (prev !== null && s - prev > long) { cuts.push([prev + beat * 2, s]); shift += s - prev - beat * 2; }
       prev = s; n.start = s - shift; n.dur = Math.min(n.dur, long);
     }
+    // the same shortening for anything else on the song's clock (the pedal): a moment inside a removed stretch
+    // moves to where the stretch was cut
+    return t => { let d = 0; for (const [a, b] of cuts) { if (t >= b) d += b - a; else if (t > a) d += t - a; } return t - d; };
   }
   // The note finder hears where a key's sound fades, which with the pedal down is long before the next note:
   // played back as heard it sounds choppy, with little silences. Let each note ring on to the next note
@@ -219,13 +240,14 @@
     const hl = d.getUint32(p); p += 4;
     const ntr = d.getUint16(p + 2), div = d.getUint16(p + 4); p += hl;
     if (div & 0x8000) throw new Error("This MIDI file uses a timing format that isn't supported.");
-    const tempos = [], tracks = [];
+    const tempos = [], tracks = [], pedals = [];
     for (let t = 0; t < ntr && p < d.byteLength; t++) {
       const id = str(4), len = d.getUint32(p); p += 4;
       const end = p + len;
       if (id !== "MTrk") { p = end; continue; }
       let tick = 0, status = 0;
       const open = {}, notes = [];
+      let pedAt = null;
       while (p < end) {
         tick += vlq();
         if (d.getUint8(p) & 0x80) status = d.getUint8(p++);
@@ -238,6 +260,11 @@
           const cmd = status & 0xf0, ch = status & 15, a = d.getUint8(p++);
           const b = cmd === 0xc0 || cmd === 0xd0 ? 0 : d.getUint8(p++);
           if (ch === 9) continue;                                   // drums
+          if (cmd === 0xb0 && a === 64) {                           // sustain pedal
+            if (b >= 64 && pedAt === null) pedAt = tick;
+            else if (b < 64 && pedAt !== null) { pedals.push([pedAt, tick]); pedAt = null; }
+            continue;
+          }
           if (cmd === 0x90 && b > 0) (open[a] = open[a] || []).push(tick);
           else if (cmd === 0x80 || cmd === 0x90) {
             const s = open[a] && open[a].shift();
@@ -264,7 +291,9 @@
       out.push([n.midi, sec(n.t0), Math.max(sec(n.t1) - sec(n.t0), 0.05), tracks.length > 1 ? +(tr !== top) : +(n.midi < 60)]);
     const t0 = Math.min(...out.map(n => n[1]));
     out.forEach(n => { n[1] = Math.round((n[1] - t0) * 1000) / 1000; n[2] = Math.round(n[2] * 1000) / 1000; });
-    return out;
+    const pedal = pedals.map(([a, b]) => [Math.max(0, sec(a) - t0), sec(b) - t0].map(x => Math.round(x * 1000) / 1000))
+      .filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+    return { notes: out, pedal };
   }
   const saveImported = () => { try { localStorage.setItem("keyfall:imported", JSON.stringify(SONGS.filter(s => s.notes))); } catch (e) {} };
   try { SONGS.push(...(JSON.parse(localStorage.getItem("keyfall:imported")) || []).map(s => ({ ...s, title: s.title.replace(/_+/g, " ").replace(/\s+/g, " ").trim() }))); } catch (e) {}
@@ -295,7 +324,7 @@
     ui.restart.hidden = true; ui.pause.hidden = true;
     const def = SONGS[ui.song.value];
     $("readyTitle").textContent = def.title;
-    $("readySub").textContent = [def.by, def.level, def.left || (def.notes && def.notes.some(n => n[3])) ? "two hands" : "one hand"].filter(Boolean).join(" · ");
+    $("readySub").textContent = [def.by, def.level, def.left || (def.notes && def.notes.some(n => n[3])) ? "two hands" : "one hand", def.pedal && def.pedal.length ? "pedal" : ""].filter(Boolean).join(" · ");
     ui.ready.hidden = !$("home").hidden || !!drill || !!train;
     updateHud();
   }
@@ -378,6 +407,11 @@
     if (!autoDown.has(midi)) noteOff(midi);
   }
 
+  function pedalDown(t) {
+    if (!song || !song.pedal) return false;
+    for (const [a, b] of song.pedal) { if (a > t) return false; if (t < b) return true; }
+    return false;
+  }
   let lastCount = null;
   function step(dt) {
     if (state !== "running") return;
@@ -403,7 +437,8 @@
         n.state = "miss"; misses++; streak = 0; updateHud();
       }
     }
-    autoDown.forEach((end, m) => { if (time >= end) { autoDown.delete(m); if (!down.has(m)) noteOff(m); } });
+    const held = pedalDown(time);
+    autoDown.forEach((end, m) => { if (time >= end && !held) { autoDown.delete(m); if (!down.has(m)) noteOff(m); } });
     if (time > song.end + 0.8) finish();
   }
 
@@ -1241,7 +1276,7 @@
     // page number
     if (S.pages > 1) {
       ctx.fillStyle = "rgba(38,42,54,.55)"; ctx.font = `600 ${Math.round(Math.max(11, S.sp * 1.25))}px system-ui, sans-serif`;
-      ctx.textAlign = "right"; ctx.fillText(`Page ${S.page + 1} of ${S.pages}`, S.right - 14, S.bottom - 8);
+      ctx.textAlign = "right"; ctx.fillText(`Page ${S.page + 1} of ${S.pages}`, S.right - 14, S.top + 18);
     }
     ctx.restore();
   }
@@ -1276,6 +1311,18 @@
       ctx.fillStyle = "rgba(38,42,54,.85)";
       for (const b of s.bars) ctx.fillRect(Math.round(b.end) - 1.4, s.trebleTop, 1.4, s.bassBottom - s.trebleTop);
       if (si === lastSys) { ctx.fillRect(Math.round(s.end) - 4.5, s.trebleTop, 4.5, s.bassBottom - s.trebleTop); ctx.fillRect(Math.round(s.end) - 8.5, s.trebleTop, 1.4, s.bassBottom - s.trebleTop); }
+      // sustain pedal: "Ped." where it goes down, a line while it's held, a tick where it lifts
+      if (song.pedal && song.pedal.length) {
+        const py = s.bassBottom + sp * 2.7;
+        ctx.strokeStyle = "rgba(38,42,54,.7)"; ctx.fillStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = Math.max(1, sp * 0.12);
+        ctx.font = `italic 700 ${Math.round(sp * 1.05)}px Georgia, serif`; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+        for (const [a, b] of song.pedal) {
+          if (b <= s.t0 || a >= s.t1) continue;
+          let x0 = sheetX(s, Math.max(a, s.t0)), x1 = sheetX(s, Math.min(b, s.t1));
+          if (a >= s.t0) { ctx.fillText("Ped.", x0 - sp * 0.4, py + sp * 0.4); x0 += sp * 2.6; }
+          if (x1 > x0) { ctx.beginPath(); ctx.moveTo(x0, py); ctx.lineTo(x1, py); if (b <= s.t1) ctx.lineTo(x1, py - sp * 0.9); ctx.stroke(); }
+        }
+      }
       // the "you are here" marker on the line being played
       if (si === curSys && state !== "idle" && time >= s.t0 - 2) {
         const x = sheetX(s, Math.max(0, time)), y0 = s.trebleTop - sp * 2.2, hh = s.bassBottom - s.trebleTop + sp * 4.4;
@@ -1403,6 +1450,15 @@
           ctx.fillStyle = "#a8f0c0"; ctx.textAlign = "center"; ctx.fillText(txt, cx, cy + 5);
         }
       }
+    }
+    // the sustain pedal, lit while it's down
+    if (song && !drill && !train && song.pedal && song.pedal.length) {
+      const on = state !== "idle" && pedalDown(time), x = W - 74, y = ui.view.value === "sheet" && sheet ? sheet.top - 30 : kbTop - 34;
+      ctx.fillStyle = on ? "rgba(255,198,92,.95)" : "rgba(255,255,255,.08)";
+      if (on) { ctx.shadowColor = "#ffc65c"; ctx.shadowBlur = 14; }
+      rrect(x, y, 62, 24, 12); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fillStyle = on ? "#2a1d05" : "rgba(255,255,255,.45)"; ctx.font = "italic 700 14px Georgia, serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("Ped.", x + 31, y + 12.5); ctx.textBaseline = "alphabetic";
     }
     // keyboard
     ctx.fillStyle = "#07080c"; ctx.fillRect(0, kbTop - 3, W, H - kbTop + 3);
@@ -1677,8 +1733,9 @@
     if (!kept) { const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress, ui.finder.value === "song" ? { onset: 0.5, frame: 0.25 } : {}); }
     if (!kept.length) throw new Error("No piano notes were found in that recording.");
     assignHands(kept);
-    const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp));
-    return kept.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left, Math.round(n.amp / loud * 100) / 100]);
+    const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp)), r = x => Math.round(x * 1000) / 1000;
+    const pedal = kept.pedal ? kept.pedal.map(([a, b]) => [r(Math.max(0, a - t0)), r(b - t0)]).filter(([a, b]) => b > a) : null;
+    return { notes: kept.map(n => [n.midi, r(n.start - t0), r(n.end - n.start), n.left, Math.round(n.amp / loud * 100) / 100]), pedal };
   }
   // the recording in mono at the rate a note finder listens at (the phone's own audio code does the work)
   async function resample(decoded, rate) {
@@ -1744,14 +1801,16 @@
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
-        else { wk.terminate(); data.type === "done" ? ok(data.notes) : fail(new Error(data.message)); }
+        else { wk.terminate(); data.type === "done" ? ok(data) : fail(new Error(data.message)); }
       };
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
       wk.postMessage({ model, samples, base: new URL("vendor/", location.href).href });
     });
-    return notes.filter(([p, s, e]) => p >= 21 && p <= 108 && e - s >= 0.03)
+    const kept = notes.notes.filter(([p, s, e]) => p >= 21 && p <= 108 && e - s >= 0.03)
       .map(([midi, start, end, vel]) => ({ midi, start, end, amp: Math.max(0.05, vel / 127) }))
       .sort((a, b) => a.start - b.start || a.midi - b.midi);
+    kept.pedal = notes.pedal || null;                       // Transkun also hears the sustain pedal
+    return kept;
   }
   // Spotify's Basic Pitch, in a worker of its own (import-worker.js) so the screen stays smooth
   async function standardNotes(samples, progress, tune) {
@@ -1788,13 +1847,14 @@
     const isMidi = String.fromCharCode(...head) === "MThd";          // what's in the file, not what it's called
     const title = f.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "My song";
     try {
-      let notes;
-      if (isMidi) notes = parseMidi(await f.arrayBuffer());
+      let got;
+      if (isMidi) got = parseMidi(await f.arrayBuffer());
       else {
         $("importBtn").classList.add("busy");
-        notes = await transcribe(f, t => { msg.textContent = t; });
+        got = await transcribe(f, t => { msg.textContent = t; });
       }
-      SONGS.push({ title, by: isMidi ? "Imported" : "From a recording", level: "My songs", notes });
+      const notes = got.notes;
+      SONGS.push({ title, by: isMidi ? "Imported" : "From a recording", level: "My songs", notes, ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}) });
       saveImported(); refreshOptions();
       msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.`;
       sfx("trained");
@@ -1840,6 +1900,8 @@
     if (mic.on && window.KeyfallML) { if (ui.listener.value === "ai") KeyfallML.start(ac, mic.src); else KeyfallML.stop(); }   // switch while listening
   };
   showModelNotes();
+  try { if (localStorage.getItem("keyfall:pedal") === "off") ui.pedal.value = "off"; } catch (e) {}
+  ui.pedal.onchange = () => { try { localStorage.setItem("keyfall:pedal", ui.pedal.value); } catch (e) {} reset(); };
   ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };
   ui.view.onchange = () => { try { localStorage.setItem("keyfall:view", ui.view.value); } catch (e) {} sheet = null; layout(); };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
@@ -1854,5 +1916,5 @@
   layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 
-  window.__keyfall = { get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { held: () => [...autoDown.keys()].length, get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
 })();

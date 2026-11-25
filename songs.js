@@ -1,5 +1,7 @@
 // Format: space-separated "Note:beats" tokens (beats default to 1). "R" is a rest,
-// "C4+E4" is a chord, "~:beats" ties (extends) the previous token, "|" is ignored.
+// "C4+E4" is a chord, "~:beats" ties (extends) the previous token, "|" marks a bar line.
+// pedal: "bar" (or "beat") plays the song with the sustain pedal, changed at every bar (or beat);
+// pedalSkip lists bars (counted from 0) played without it.
 const e8 = s => s.split(" ").map(n => n + ":.5").join(" ");      // run of eighth notes
 const rep = (s, n) => Array(n).fill(s).join(" | ");
 
@@ -54,15 +56,15 @@ const SONGS = [
     right: "R C4 E4 F4 | G4:4 | R C4 E4 F4 | G4:4 | R C4 E4 F4 | G4:2 E4:2 | C4:2 E4:2 | D4:4 | R E4 E4 D4 | C4:3 C4 | E4:2 G4:2 | G4 F4:3 | R:2 E4 F4 | G4:2 E4:2 | C4:2 D4:2 | C4:4",
   },
   {
-    title: "Amazing Grace", by: "Traditional", level: "Medium", bpm: 90,
+    title: "Amazing Grace", by: "Traditional", level: "Medium", bpm: 90, pedal: "bar", pedalSkip: [0],
     right: "D4 | G4:2 B4:.5 G4:.5 | B4:2 A4 | G4:2 E4 | D4:2 D4 | G4:2 B4:.5 G4:.5 | B4:2 A4 | D5:3 | D5:2 B4 | D5:1.5 B4:.5 D5:.5 B4:.5 | G4:2 D4 | E4:1.5 G4:.5 G4:.5 E4:.5 | D4:2 D4 | G4:2 B4:.5 G4:.5 | B4:2 A4 | G4:3",
   },
   {
-    title: "Brahms' Lullaby", by: "Brahms", level: "Medium", bpm: 90,
+    title: "Brahms' Lullaby", by: "Brahms", level: "Medium", bpm: 90, pedal: "bar", pedalSkip: [0],
     right: "E4:.5 E4:.5 | G4:2 E4:.5 E4:.5 | G4:2 E4:.5 G4:.5 | C5 B4:1.5 A4:.5 | A4 G4 D4:.5 E4:.5 | F4 D4 D4:.5 E4:.5 | F4:2 D4:.5 F4:.5 | B4:.5 A4:.5 G4 B4 | C5:2 C4:.5 C4:.5 | C5:2 A4:.5 F4:.5 | G4:2 E4:.5 C4:.5 | F4 G4 A4 | G4:2 C4:.5 C4:.5 | C5:2 A4:.5 F4:.5 | G4:2 E4:.5 C4:.5 | F4 E4 D4 | C4:3",
   },
   {
-    title: "Greensleeves", by: "Traditional", level: "Medium", bpm: 110,
+    title: "Greensleeves", by: "Traditional", level: "Medium", bpm: 110, pedal: "bar", pedalSkip: [0],
     right: "A4:.5 | C5 D5:.5 E5:.75 F5:.25 E5:.5 | D5 B4:.5 G4:.75 A4:.25 B4:.5 | C5 A4:.5 A4:.75 G#4:.25 A4:.5 | B4 G#4:.5 E4 A4:.5 | C5 D5:.5 E5:.75 F5:.25 E5:.5 | D5 B4:.5 G4:.75 A4:.25 B4:.5 | C5:.75 B4:.25 A4:.5 G#4:.75 F#4:.25 G#4:.5 | A4:3 | G5:1.5 G5:.75 F5:.25 E5:.5 | D5 B4:.5 G4:.75 A4:.25 B4:.5 | C5 A4:.5 A4:.75 G#4:.25 A4:.5 | B4 G#4:.5 E4:1.5 | G5:1.5 G5:.75 F5:.25 E5:.5 | D5 B4:.5 G4:.75 A4:.25 B4:.5 | C5:.75 B4:.25 A4:.5 G#4:.75 F#4:.25 G#4:.5 | A4:3",
   },
   {
@@ -71,16 +73,16 @@ const SONGS = [
     left: "G3:2 A3 | B3:3 | C4:3 | B3:3 | A3:3 | G3:3 | D4 B3 G3 | D4 D3:2",
   },
   {
-    title: "Canon in D", by: "Pachelbel", level: "Medium", bpm: 66,
+    title: "Canon in D", by: "Pachelbel", level: "Medium", bpm: 66, pedal: "beat",
     right: "F#5 E5 D5 C#5 | B4 A4 B4 C#5 | D5 C#5 B4 A4 | G4 F#4 G4 E4 | " + e8("D4 F#4 A4 G4 F#4 D4 F#4 E4") + " | " + e8("D4 B3 D4 A4 G4 B4 A4 G4") + " | F#4:4",
     left: rep("D3 A2 B2 F#2 | G2 D2 G2 A2", 3) + " | D3:4",
   },
   {
-    title: "Für Elise (opening)", by: "Beethoven", level: "Medium", bpm: 126,
+    title: "Für Elise (opening)", by: "Beethoven", level: "Medium", bpm: 126, pedal: "bar", pedalSkip: [0, 1, 4, 5],
     right: "E5:.5 D#5:.5 | E5:.5 D#5:.5 E5:.5 B4:.5 D5:.5 C5:.5 | A4 R:.5 C4:.5 E4:.5 A4:.5 | B4 R:.5 E4:.5 G#4:.5 B4:.5 | C5 R:.5 E4:.5 E5:.5 D#5:.5 | E5:.5 D#5:.5 E5:.5 B4:.5 D5:.5 C5:.5 | A4 R:.5 C4:.5 E4:.5 A4:.5 | B4 R:.5 E4:.5 C5:.5 B4:.5 | A4:2",
   },
   {
-    title: "Prelude in C", by: "J. S. Bach", level: "Hard", bpm: 66,
+    title: "Prelude in C", by: "J. S. Bach", level: "Hard", bpm: 66, pedal: "bar",
     right: PRELUDE,
   },
 ];
