@@ -145,20 +145,6 @@
     if (ml.state !== "failed") ml.state = "off";
   };
 
-  // ---------- for turning recordings into notes on the main thread: load the model's library ----------
-  const loadScript = src => new Promise((ok, fail) => {
-    if ([...document.scripts].some(s => s.src.endsWith(src))) return ok();
-    const el = document.createElement("script"); el.src = src; el.onload = ok; el.onerror = () => fail(new Error(src));
-    document.head.append(el);
-  });
-  ml.prepare = async () => {
-    await loadScript("vendor/tf.min.js");
-    // the recording converter uses the graphics chip (WebGL), or plain JavaScript where that's missing
-    try { if (!(await tf.setBackend("webgl"))) await tf.setBackend("cpu"); } catch (e) { await tf.setBackend("cpu"); }
-    await tf.ready();
-    startWorker().catch(() => {});                                  // warm up live listening too
-  };
-
   // ---------- for automated tests: feed 22,050 Hz samples directly with a given clock ----------
   ml._test = {
     feed(samples, at) { for (const v of samples) store(v); lastSampleAt = at; },

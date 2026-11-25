@@ -165,4 +165,10 @@ button.primary:hover { background: linear-gradient(#63c0ff, #2b86e0); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .song.mysongs { padding-right: 40px; }
 .song .t { overflow-wrap: anywhere; }
-.importas { display: inline-flex; margin: 6px 0 0 10px; }
+.models { max-width: 620px; margin: 4px 0 16px; padding: 14px 16px 6px; border-radius: 12px; border: 1px solid rgba(127,212,255,.18);
+  background: linear-gradient(160deg, #1f2638, #191d2a); box-shadow: 0 4px 16px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.06); }
+.mhead { font-weight: 700; color: #fff; margin-bottom: 10px; }
+.mrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.mrow > span { min-width: 170px; color: #d6deee; }
+.mrow select { flex: 1 1 220px; min-width: 0; }
+.mnote { margin: 6px 0 12px; color: #9fb0cc; font-size: 13px; }

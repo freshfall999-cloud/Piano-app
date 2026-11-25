@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Keyfall — Piano Practice</title>
-<link rel="stylesheet" href="style.css?v=202611250211">
+<link rel="stylesheet" href="style.css?v=202611250213">
 </head>
 <body>
 <header id="bar">
@@ -114,26 +114,36 @@
         <option value="high">High (quiet piano)</option>
       </select>
     </label>
-    <label class="sensrow"><input type="checkbox" id="ai" checked> AI listening: a trained model decides which keys you played (takes a moment to load the first time)</label>
+    <div class="models" id="models">
+      <div class="mhead">🧠 Note recognition</div>
+      <label class="mrow"><span>🎤 Hearing your piano</span>
+        <select id="listener">
+          <option value="ai" selected>AI: Spotify Basic Pitch + checks</option>
+          <option value="simple">Simple: pitch detection only</option>
+        </select>
+      </label>
+      <p class="mnote" id="listenerNote"></p>
+      <label class="mrow"><span>🎵 MP3 → notes</span>
+        <select id="finder">
+          <option value="best" selected>Best: Google Onsets and Frames</option>
+          <option value="standard">Fast: Spotify Basic Pitch</option>
+        </select>
+      </label>
+      <p class="mnote" id="finderNote"></p>
+    </div>
     <label class="sensrow"><input type="checkbox" id="sfx" checked> Sound effects</label>
     <label class="sensrow"><input type="checkbox" id="ignoreTalk" checked> Ignore talking (turn off if very short, staccato notes are missed)</label>
     <label class="import" id="importBtn">＋ Add your own song (MIDI file or MP3 recording)
       <input id="file" type="file" accept=".mid,.midi,audio/midi,audio/x-midi,.mp3,.m4a,.wav,.aac,audio/*" hidden>
-    </label>
-    <label class="importas">MP3 note finder
-      <select id="finder">
-        <option value="best" selected>Best quality: fewer wrong notes (60 MB download once)</option>
-        <option value="standard">Fast: quicker, more mistakes</option>
-      </select>
     </label>
     <span id="importMsg"></span>
     <div id="list"></div>
     <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0). Recordings are turned into notes on this device with Spotify's Basic Pitch or Google Magenta's Onsets and Frames (both Apache 2.0).</p>
   </div>
 </div>
-<script src="listen-ml.js?v=202611250211"></script>
-<script src="sound.js?v=202611250211"></script>
-<script src="songs.js?v=202611250211"></script>
-<script src="app.js?v=202611250211"></script>
+<script src="listen-ml.js?v=202611250213"></script>
+<script src="sound.js?v=202611250213"></script>
+<script src="songs.js?v=202611250213"></script>
+<script src="app.js?v=202611250213"></script>
 </body>
 </html>

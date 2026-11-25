@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), ai: $("ai"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), sfx: $("sfx"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -597,7 +597,8 @@
     mic.analyser.fftSize = 8192; mic.analyser.smoothingTimeConstant = 0;
     const micSource = ac.createMediaStreamSource(mic.stream);
     micSource.connect(mic.analyser);
-    if (window.KeyfallML && ui.ai.checked) KeyfallML.start(ac, micSource);
+    mic.src = micSource;
+    if (window.KeyfallML && ui.listener.value === "ai") KeyfallML.start(ac, micSource);
     // Safari only processes nodes that lead to the speakers, so route through a silent gain
     const mute = ac.createGain(); mute.gain.value = 0;
     mic.analyser.connect(mute).connect(ac.destination);
@@ -1792,9 +1793,25 @@
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:finder"); if (v === "standard" || v === "best") ui.finder.value = v; } catch (e) {}
-  ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} };
-  try { if (localStorage.getItem("keyfall:ai") === "0") ui.ai.checked = false; } catch (e) {}
-  ui.ai.onchange = () => { try { localStorage.setItem("keyfall:ai", ui.ai.checked ? "1" : "0"); } catch (e) {} };
+  ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
+  // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
+  const MODEL_NOTES = {
+    ai: "Recommended. A trained AI model decides which keys you played, with extra checks so talking and echoes don't count. Small download the first time.",
+    simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
+    best: "Recommended. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
+    standard: "Takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
+  };
+  function showModelNotes() {
+    $("listenerNote").textContent = MODEL_NOTES[ui.listener.value];
+    $("finderNote").textContent = MODEL_NOTES[ui.finder.value];
+  }
+  try { const v = localStorage.getItem("keyfall:listener") || (localStorage.getItem("keyfall:ai") === "0" ? "simple" : ""); if (v === "ai" || v === "simple") ui.listener.value = v; } catch (e) {}
+  ui.listener.onchange = () => {
+    try { localStorage.setItem("keyfall:listener", ui.listener.value); } catch (e) {}
+    showModelNotes();
+    if (mic.on && window.KeyfallML) { if (ui.listener.value === "ai") KeyfallML.start(ac, mic.src); else KeyfallML.stop(); }   // switch while listening
+  };
+  showModelNotes();
   ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };
   ui.view.onchange = () => { try { localStorage.setItem("keyfall:view", ui.view.value); } catch (e) {} sheet = null; layout(); };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
