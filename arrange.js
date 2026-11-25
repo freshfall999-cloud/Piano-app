@@ -237,5 +237,110 @@
     return { notes: out.map(n => [n.midi, r((n.pos - p0) * beat), r(Math.max(0.1, n.len * beat) * 0.95), n.left, n.amp]),
       pedal: [], beat: r(beat), bar0: r((((0 - p0) % 4) + 4) % 4 * beat) };
   }
-  window.KeyfallArrange = { arrange, beats, chords, melody, fromTracks };
+  // ---------- a band's notes → the same music on piano keys, playable by two hands ----------
+  // Every instrument is kept (drums aside), but moved onto the piano: the singer (or lead) becomes the right hand's
+  // top line, the bass the left hand's bottom line, and guitar, keys, strings and pads fill in between, moved by
+  // octaves to fit under the melody or over the bass. Unisons between instruments become one key; each hand plays
+  // at most 4 keys at a time within a hand's reach; everything sits on a sixteenth-note grid of the song's beat.
+  function pianoReduce(tracks, bt) {
+    if (bt.length < 4) return null;
+    const isVoice = t => /voc|vox|voice|sing|lead|melod/i.test(t.name) || (t.program >= 52 && t.program <= 54) || (t.program >= 56 && t.program <= 87) || t.program === 100 || t.program === 101;
+    const isBass = t => /bass/i.test(t.name) || (t.program >= 32 && t.program <= 39);
+    const most = Math.max(...tracks.map(t => t.notes.length)), enough = t => t.notes.length >= Math.max(8, 0.15 * most);
+    const avg = t => t.notes.reduce((a, n) => a + n.midi, 0) / t.notes.length;
+    let mel = tracks.filter(t => isVoice(t) && enough(t)).sort((a, b) => b.notes.length - a.notes.length)[0];
+    const melIsVoice = !!mel;
+    if (!mel) mel = tracks.filter(t => !isBass(t) && enough(t)).sort((a, b) => b.notes.length - a.notes.length || avg(b) - avg(a))[0]
+      || tracks.filter(t => !isBass(t)).sort((a, b) => b.notes.length - a.notes.length)[0];
+    const end = Math.max(...tracks.flatMap(t => t.notes.map(n => n.end)));
+    const times = bt.filter(t => t <= end + 1);
+    while (times.length < 2 || times[times.length - 1] < end) times.push(times[times.length - 1] + (times.length > 1 ? times[times.length - 1] - times[times.length - 2] : 0.5));
+    const posOf = t => { let i = 0; while (i < times.length - 2 && times[i + 1] <= t) i++; return i + (t - times[i]) / (times[i + 1] - times[i]); };
+    const q = x => Math.round(x * 4) / 4;                               // sixteenth notes
+    const out = [];
+    // right hand's top line: the melody, one note at a time, wobbles and slides merged, moved to the right hand's range
+    let line = []; const inLine = new Set();
+    if (mel) {
+      const ns = mel.notes.slice().sort((a, b) => a.start - b.start || b.midi - a.midi);
+      for (const n of ns) {
+        const p = q(posOf(n.start)), e = q(posOf(n.end)), last = line[line.length - 1];
+        if (last && p <= last.pos) { if (n.midi > last.midi && !melIsVoice) { inLine.delete(last.src); last.midi = n.midi; last.src = n; inLine.add(n); } continue; }   // top note of a chord
+        if (last && melIsVoice && p - last.pos <= 0.25 && Math.abs(n.midi - last.midi) <= 1) { last.end = Math.max(last.end, e); continue; } // a slide
+        line.push({ midi: n.midi, pos: p, end: Math.max(e, p + 0.25), src: n }); inLine.add(n);
+      }
+      line.forEach((n, i) => { const nx = line[i + 1]; if (nx && n.end > nx.pos) n.end = nx.pos; });
+      const med = line.map(n => n.midi).sort((a, b) => a - b)[line.length >> 1] || 67;
+      let shift = 0; while (med + shift < 62) shift += 12; while (med + shift > 79) shift -= 12;
+      for (const n of line) { n.midi += shift; out.push({ midi: n.midi, pos: n.pos, len: n.end - n.pos, left: 0, amp: 0.95, role: "melody" }); }
+    }
+    const melodyAt = pos => { let lo = 0, hi = line.length - 1, f = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (line[m].pos <= pos) { f = line[m]; lo = m + 1; } else hi = m - 1; } return f && pos < f.end + 0.01 ? f.midi : null; };
+    // left hand's bottom line: the bass, lowest note at a time, between E1 and E3
+    const bassNotes = tracks.filter(t => t !== mel && isBass(t)).flatMap(t => t.notes);
+    const bl = [];
+    for (const n of bassNotes.slice().sort((a, b) => a.start - b.start || a.midi - b.midi)) {
+      const p = q(posOf(n.start)), e = q(posOf(n.end)), last = bl[bl.length - 1];
+      if (last && p <= last.pos) continue;
+      let m = n.midi; while (m < 28) m += 12; while (m > 52) m -= 12;
+      bl.push({ midi: m, pos: p, end: Math.max(e, p + 0.25) });
+    }
+    bl.forEach((n, i) => { const nx = bl[i + 1]; if (nx && n.end > nx.pos) n.end = nx.pos; n.end = Math.min(n.end, n.pos + 4); });
+    // where no bass was heard, the left hand plays the root of the chord (found from all the instruments)
+    {
+      const T = Math.ceil(end * FPS) + 1, frames = new Float32Array(T * P);
+      for (const t of tracks) for (const n of t.notes) {
+        const pp = Math.min(87, Math.max(0, n.midi - 21));
+        for (let f = Math.round(n.start * FPS); f < Math.min(T, Math.round(n.end * FPS)); f++) frames[f * P + pp] = 1;
+      }
+      const seq = chords(frames, times);
+      const covered = pos => bl.some(n => n.pos <= pos + 0.01 && pos < n.end - 0.01);
+      let i = 0;
+      while (i < seq.length) {
+        const k = seq[i]; let j = i + 1;
+        while (j < seq.length && seq[j] === k && j % 4 !== 0) j++;
+        if (k && !covered(i)) { let m = 36 + k.root; if (m < 40) m += 12; bl.push({ midi: m, pos: i, end: j }); }
+        i = j;
+      }
+      bl.sort((a, b) => a.pos - b.pos);
+      bl.forEach((n, x) => { const nx = bl[x + 1]; if (nx && n.end > nx.pos) n.end = nx.pos; });
+    }
+    for (const n of bl) out.push({ midi: n.midi, pos: n.pos, len: n.end - n.pos, left: 1, amp: 0.8, role: "bass" });
+    const bassAt = pos => { let f = null; for (const n of bl) { if (n.pos > pos) break; f = n; } return f && pos < f.end + 0.01 ? f.midi : null; };
+    // everything else in between
+    const fill = tracks.filter(t => !(t === mel && melIsVoice) && !(t !== mel && isBass(t))).flatMap(t => t.notes.map(n => ({ n, fromMel: t === mel })));
+    for (const { n } of fill) {
+      if (inLine.has(n)) continue;                                        // (already the melody)
+      const p = q(posOf(n.start)), len = Math.min(4, Math.max(0.25, q(posOf(n.end)) - p));
+      const top = melodyAt(p), low = bassAt(p);
+      let m = n.midi;
+      if (m >= 60 || top !== null && m > top) {                          // right hand: under the melody
+        if (top !== null) { while (m >= top) m -= 12; while (m < top - 12) m += 12; if (m === top) continue; }
+        if (m >= 55) { out.push({ midi: m, pos: p, len, left: 0, amp: 0.55, role: "fill" }); continue; }
+      }
+      if (low !== null) { while (m <= low + 2) m += 12; while (m > low + 19) m -= 12; if (m <= low + 2) continue; }   // left hand: over the bass
+      else { while (m < 43) m += 12; while (m > 59) m -= 12; }
+      out.push({ midi: m, pos: p, len, left: 1, amp: 0.55, role: "fill" });
+    }
+    // one key for unisons; at most 4 keys per hand at a time (melody / bass first)
+    const byPos = new Map();
+    for (const n of out) { if (n.midi < 21 || n.midi > 108) continue; const k = n.pos + ":" + n.left; if (!byPos.has(k)) byPos.set(k, []); byPos.get(k).push(n); }
+    const kept = [];
+    for (const group of byPos.values()) {
+      const seen = new Map();
+      for (const n of group.sort((a, b) => (a.role === "fill") - (b.role === "fill") || b.len - a.len)) if (!seen.has(n.midi)) seen.set(n.midi, n);
+      let g = [...seen.values()];
+      const main = g.filter(n => n.role !== "fill"), extra = g.filter(n => n.role === "fill");
+      const anchor = main.length ? main[0].midi : null;
+      // within reach of the melody (right) or the bass (left): about an octave and a third
+      const reach = extra.filter(n => anchor === null || Math.abs(n.midi - anchor) <= 15)
+        .sort((a, b) => g[0].left ? a.midi - b.midi : b.midi - a.midi);
+      g = [...main, ...reach.slice(0, Math.max(0, 4 - main.length))];
+      kept.push(...g);
+    }
+    kept.sort((a, b) => a.pos - b.pos || a.midi - b.midi);
+    if (!kept.length) return null;
+    const B = (times[times.length - 1] - times[0]) / (times.length - 1), p0 = kept[0].pos, r = x => Math.round(x * 1000) / 1000;
+    return { notes: kept.map(n => [n.midi, r((n.pos - p0) * B), r(Math.max(0.1, n.len * B) * 0.95), n.left, n.amp]),
+      pedal: [], beat: r(B), bar0: r((((0 - p0) % 4) + 4) % 4 * B) };
+  }
+  window.KeyfallArrange = { arrange, beats, chords, melody, fromTracks, pianoReduce };
 })();

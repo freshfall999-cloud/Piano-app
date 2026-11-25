@@ -296,7 +296,7 @@
     const piano = tr => tr.program < 8 && !/voc|vox|voice|sing|lead|melod|bass|guit|gtr|synth|string/i.test(tr.name);
     if (tracks.filter(tr => !piano(tr)).length >= 2 && window.KeyfallArrange) {
       const bt = []; for (let k = 0; sec(k * div) < 3600; k++) { bt.push(sec(k * div)); if (tracks.every(tr => tr.every(n => n.t1 < k * div))) break; }
-      const arr = KeyfallArrange.fromTracks(tracks.map(tr => ({ name: tr.name, program: tr.program, notes: tr.map(n => ({ midi: n.midi, start: sec(n.t0), end: sec(n.t1) })) })), bt);
+      const arr = KeyfallArrange.pianoReduce(tracks.map(tr => ({ name: tr.name, program: tr.program, notes: tr.map(n => ({ midi: n.midi, start: sec(n.t0), end: sec(n.t1) })) })), bt);
       if (arr) return arr;
     }
     // hands: the track with the highest average pitch is the right hand; one track is split at middle C
@@ -1893,7 +1893,7 @@
     const all = [...tracks.values()];
     if (!all.length) throw new Error("No notes were found in that recording.");
     if (!all.every(t => t.program < 8) && flux) {
-      const a = KeyfallArrange.fromTracks(all, KeyfallArrange.beats(flux).times);
+      const a = KeyfallArrange.pianoReduce(all, KeyfallArrange.beats(flux).times);
       if (a && a.notes.length) return a;
     }
     return all.flatMap(t => t.notes.map(n => ({ midi: n.midi, start: n.start, end: n.end, amp: 0.8 }))).sort((a, b) => a.start - b.start || a.midi - b.midi);
