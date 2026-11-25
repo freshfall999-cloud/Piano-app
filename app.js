@@ -115,10 +115,16 @@
       for (const [midi, start, dur, left, amp] of def.notes)
         notes.push({ midi, start, dur, amp, hand: left ? "left" : "right", state: "pending", played: false });
       notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
-      beat = guessBeat(notes);
-      cut = closeGaps(notes, beat);
-      end = Math.max(...notes.map(n => n.start + n.dur));
-      for (let t = 0; t < end; t += beat * 4) bars.push(t);
+      if (def.beat) {                    // an arrangement: it knows its beat and where the bars start
+        beat = def.beat;
+        end = Math.max(...notes.map(n => n.start + n.dur));
+        for (let t = def.bar0 || 0; t < end; t += beat * 4) bars.push(t);
+      } else {
+        beat = guessBeat(notes);
+        cut = closeGaps(notes, beat);
+        end = Math.max(...notes.map(n => n.start + n.dur));
+        for (let t = 0; t < end; t += beat * 4) bars.push(t);
+      }
     } else {
       const lb = [];
       end = Math.max(parseTrack(def.right, "right", beat, notes, bars), parseTrack(def.left, "left", beat, notes, lb));
@@ -132,7 +138,7 @@
     const barList = bars.filter(b => b > 0.01 && b < end - 0.01);
     const pedal = ui.pedal.value === "off" ? [] : pedalOf(def, barList, end, beat, cut);
     // a recording without pedal marks: let its notes ring on to the next one instead
-    if (def.notes && !(def.pedal && def.pedal.length)) letRing(uniq, beat);
+    if (def.notes && !def.beat && !(def.pedal && def.pedal.length)) letRing(uniq, beat);
     return { def, notes: uniq, end, beat, bars: barList, pedal };
   }
   // When the sustain pedal is down: [[down, up], ...] in song time. From the file (MIDI pedal, or the pedal
@@ -1730,6 +1736,15 @@
       try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" ? 44100 : 16000), progress); }
       catch (e) { console.warn(m + " finder failed:", e); progress("That note finder didn't work on this device; using the standard one…"); }
     }
+    if (ui.finder.value === "arrange") {
+      // a full song → a piano arrangement: melody in the right hand, bass and chords in the left, on the beat
+      const mono = await resample(decoded, 22050); decoded = null;
+      const found = await standardNotes(mono, progress, { onset: 0.5, frame: 0.25, arrange: true });
+      progress("Finding the beat, the chords and the melody…");
+      await new Promise(r => setTimeout(r, 30));
+      const a = KeyfallArrange.arrange(found.map(n => [n.midi, n.start, n.end - n.start, n.amp]), found.raw.frames, found.flux);
+      if (a && a.notes.length) return { notes: a.notes, pedal: null, beat: a.beat, bar0: a.bar0 };
+    }
     if (!kept) { const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress, ui.finder.value === "song" ? { onset: 0.5, frame: 0.25 } : {}); }
     if (!kept.length) throw new Error("No piano notes were found in that recording.");
     assignHands(kept);
@@ -1816,15 +1831,16 @@
   async function standardNotes(samples, progress, tune) {
     progress("Finding the notes… 0%");
     const base = new URL("vendor/", location.href).href;
-    const found = await new Promise((ok, fail) => {
-      const wk = new Worker("import-worker.js?v=2");
+    const res = await new Promise((ok, fail) => {
+      const wk = new Worker("import-worker.js?v=4");
       wk.onmessage = ({ data }) => {
         if (data.type === "progress") progress(`Finding the notes… ${Math.round(data.value * 100)}%`);
-        else { wk.terminate(); if (data.type === "done") { if (data.raw) window.__bpRaw = data.raw; ok(data.notes); } else fail(new Error(data.message)); }
+        else { wk.terminate(); if (data.type === "done") { if (data.raw) window.__bpRaw = data.raw; ok(data); } else fail(new Error(data.message)); }
       };
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
       wk.postMessage({ base, samples, keepRaw: !!window.__keepBpRaw, ...tune });
     });
+    const found = res.notes;
     // keep real piano notes: very short blips and very quiet echoes go, and a key "struck" twice within 80 ms is one strike.
     // (The thresholds already split notes only at real strikes, so repeated notes stay separate.)
     const loud = Math.max(...found.map(n => n[3]), 0);
@@ -1836,6 +1852,7 @@
       const k = { midi, start: s0, end: s1, amp };
       kept.push(k); lastOf[midi] = k;
     }
+    if (tune && tune.arrange) { kept.raw = res.raw; kept.flux = res.flux; }
     return kept;
   }
 
@@ -1854,7 +1871,8 @@
         got = await transcribe(f, t => { msg.textContent = t; });
       }
       const notes = got.notes;
-      SONGS.push({ title, by: isMidi ? "Imported" : "From a recording", level: "My songs", notes, ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}) });
+      SONGS.push({ title, by: isMidi ? "Imported" : got.beat ? "Piano arrangement" : "From a recording", level: "My songs", notes,
+        ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}), ...(got.beat ? { beat: got.beat, bar0: got.bar0 } : {}) });
       saveImported(); refreshOptions();
       msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.`;
       sfx("trained");
@@ -1875,7 +1893,7 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "transkun", "bytedance", "qmul", "sony"].includes(v)) ui.finder.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "transkun", "bytedance", "qmul", "sony"].includes(v)) ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
   // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
   const MODEL_NOTES = {
@@ -1886,6 +1904,7 @@
     qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
     sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
     bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
+    arrange: "Recommended for songs with singing and beats, like hip-hop and pop: instead of writing down every sound, it finds the beat, the chords and the main melody and makes a piano version (melody in the right hand, bass and chords in the left, lined up on the beat), like a piano cover. Takes seconds.",
     song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
     standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
   };

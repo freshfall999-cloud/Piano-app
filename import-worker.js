@@ -5,6 +5,23 @@
 /* global tf, BasicPitchLib */
 self.window = self;                                   // basic-pitch.js looks for window.tf
 const RATE = 22050, HOP = 256, WIN = RATE * 2 - HOP, TRIM = 15, PAD = 30 * HOP, STEP = WIN - PAD, PITCHES = 88;
+function makeFFT(n) {                                     // radix-2 FFT, in place
+  const rev = new Uint32Array(n), bits = Math.log2(n);
+  for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); rev[i] = r; }
+  const cos = new Float64Array(n / 2), sin = new Float64Array(n / 2);
+  for (let i = 0; i < n / 2; i++) { cos[i] = Math.cos(2 * Math.PI * i / n); sin[i] = -Math.sin(2 * Math.PI * i / n); }
+  return (re, im) => {
+    for (let i = 0; i < n; i++) { const j = rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (let size = 2; size <= n; size <<= 1) {
+      const h = size >> 1, step = n / size;
+      for (let s = 0; s < n; s += size) for (let k = 0; k < h; k++) {
+        const wr = cos[k * step], wi = sin[k * step], a = s + k, b = a + h;
+        const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+  };
+}
 self.onmessage = async ({ data }) => {
   try {
     importScripts(data.base + "tf.min.js", data.base + "tf-backend-wasm.min.js", data.base + "basic-pitch/basic-pitch.js");
@@ -44,7 +61,23 @@ self.onmessage = async ({ data }) => {
     const { outputToNotesPoly, noteFramesToTime } = BasicPitchLib;
     const notes = noteFramesToTime(outputToNotesPoly(F, O, data.onset ?? 0.7, data.frame ?? 0.45, 7, true, null, null, false, 11))
       .map(n => [n.pitchMidi, n.startTimeSeconds, n.durationSeconds, n.amplitude]);
-    self.postMessage({ type: "done", notes, raw: data.keepRaw ? { frames, onsets } : null });
+    // for making a piano arrangement: how sharply the sound changes, frame by frame (finds the beat, drums included)
+    let flux = null;
+    if (data.arrange) {
+      const N = 1024, half = N / 2, n = Math.floor(samples.length / HOP), win = new Float32Array(N), re = new Float64Array(N), im = new Float64Array(N);
+      for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+      const fft = makeFFT(N), prev = new Float32Array(half);
+      flux = new Float32Array(n); var low = new Float32Array(n);
+      for (let t = 0; t < n; t++) {
+        for (let i = 0; i < N; i++) { const k = t * HOP + i - half; re[i] = k >= 0 && k < samples.length ? samples[k] * win[i] : 0; im[i] = 0; }
+        fft(re, im);
+        let f = 0;
+        let g = 0;
+        for (let k = 1; k < half; k++) { const m = Math.log1p(100 * Math.hypot(re[k], im[k])); if (m > prev[k]) { f += m - prev[k]; if (k <= 12) g += m - prev[k]; } prev[k] = m; }
+        flux[t] = f; low[t] = g;                               // (bins up to ~250 Hz: kick drum and bass)
+      }
+    }
+    self.postMessage({ type: "done", notes, raw: data.keepRaw || data.arrange ? { frames: frames.subarray(0, done * PITCHES), onsets } : null, flux: flux && { all: flux, low } });
   } catch (e) {
     self.postMessage({ type: "error", message: String(e && e.message || e) });
   }
