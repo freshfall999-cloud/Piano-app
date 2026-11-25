@@ -19,3 +19,7 @@ Converted piano transcription models (PyTorch → ONNX, weights stored as 16-bit
   the MT3 token vocabulary. The weights are CC BY-NC 4.0 and are never part of this repository.
 - `tkaug_*` — Transkun V2 Aug (Yujia Yan; MIT), the V2 checkpoint trained with data augmentation, from the author's
   model card (github.com/Yujia-Yan/Transkun), converted the same way as `transkun_*` (its own analysis windows).
+- `htdemucs6s_piano.*` — Demucs v4 `htdemucs_6s` (Hybrid Transformer Demucs, 6 sources; Alexandre Défossez / Meta,
+  MIT, see LICENSE-demucs; weights from dl.fbaipublicfiles.com). Converted without its STFT / inverse STFT (done in
+  `onnx-worker.js`) and with only the piano source as output. In the browser, with Demucs' own 7.8 s pieces, 25%
+  overlap and triangular blending, it matches the original (correlation 1.00000, 54 dB) on a 20 s test mix.

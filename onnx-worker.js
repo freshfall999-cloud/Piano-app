@@ -334,12 +334,91 @@ async function sony(audio) {
   return notes.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
 }
 
+// ---------- Demucs htdemucs_6s (Meta, MIT): pull the piano out of a full song ----------
+// The network runs on 7.8-second pieces of the stereo song; its spectrogram in and out (STFT / inverse STFT) is done
+// here, and the pieces are blended with Demucs' own triangular weights (25% overlap). Returns the piano, mono.
+function stftFrames(x, nfft, hop, win) {                  // torch.stft(center, reflect, normalized): frames × (nfft/2+1)
+  const half = nfft / 2, n = 1 + Math.floor(x.length / hop), nb = half + 1, re = new Float64Array(nfft), im = new Float64Array(nfft);
+  const R = new Float32Array(n * nb), I = new Float32Array(n * nb), fft = makeFFT(nfft), norm = 1 / Math.sqrt(nfft);
+  const at = i => { let k = i - half; if (k < 0) k = -k; if (k >= x.length) k = 2 * (x.length - 1) - k; return x[k]; };
+  for (let t = 0; t < n; t++) {
+    for (let j = 0; j < nfft; j++) { re[j] = at(t * hop + j) * win[j]; im[j] = 0; }
+    fft(re, im);
+    for (let k = 0; k < nb; k++) { R[t * nb + k] = re[k] * norm; I[t * nb + k] = im[k] * norm; }
+  }
+  return { R, I, n, nb };
+}
+function istft(R, I, n, nb, nfft, hop, win, length) {     // torch.istft(center, normalized, length)
+  const half = nfft / 2, total = nfft + hop * (n - 1), y = new Float64Array(total), env = new Float64Array(total);
+  const re = new Float64Array(nfft), im = new Float64Array(nfft), fft = makeFFT(nfft), sc = Math.sqrt(nfft);
+  for (let t = 0; t < n; t++) {
+    // inverse real FFT through the forward FFT: conj → FFT → conj, divided by N
+    for (let k = 0; k < nb; k++) { re[k] = R[t * nb + k] * sc; im[k] = -I[t * nb + k] * sc; }
+    for (let k = nb; k < nfft; k++) { re[k] = R[t * nb + (nfft - k)] * sc; im[k] = I[t * nb + (nfft - k)] * sc; }
+    fft(re, im);
+    for (let j = 0; j < nfft; j++) { const v = re[j] / nfft; y[t * hop + j] += v * win[j]; env[t * hop + j] += win[j] * win[j]; }
+  }
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i++) { const k = i + half; out[i] = k < total && env[k] > 1e-11 ? y[k] / env[k] : 0; }
+  return out;
+}
+async function demucsPiano(left, right) {
+  const s = await session("htdemucs6s_piano", "Demucs model");
+  const SEGN = 343980, NFFT = 4096, HOPD = 1024, NB = NFFT / 2, LE = Math.ceil(SEGN / HOPD), PAD = HOPD / 2 * 3;
+  const win = new Float64Array(NFFT); for (let i = 0; i < NFFT; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / NFFT);
+  const L = left.length;
+  // the song normalised as Demucs does it (by the mono mix's mean and spread)
+  let sum = 0, sum2 = 0; for (let i = 0; i < L; i++) { const m = (left[i] + right[i]) / 2; sum += m; sum2 += m * m; }
+  const mean = sum / L, sd = Math.sqrt(Math.max(0, (sum2 - sum * sum / L) / (L - 1))) + 1e-8;
+  const stride = Math.floor(0.75 * SEGN), half = SEGN >> 1;
+  const weight = new Float32Array(SEGN); for (let i = 0; i < SEGN; i++) weight[i] = (i < half ? i + 1 : SEGN - i) / half;
+  const out = new Float32Array(L), sumW = new Float32Array(L), offsets = [];
+  for (let o = 0; o < L; o += stride) offsets.push(o);
+  for (let oi = 0; oi < offsets.length; oi++) {
+    const off = offsets[oi], len = Math.min(SEGN, L - off);
+    // a short last piece is centred in a full-length window filled with the song around it (as Demucs does)
+    const lead = (SEGN - len) >> 1, from = off - lead;
+    const mix = new Float32Array(2 * SEGN), mag = new Float32Array(4 * NB * LE);
+    for (let c = 0; c < 2; c++) {
+      const src = c ? right : left;
+      for (let i = 0; i < SEGN; i++) { const k = from + i; if (k >= 0 && k < L) mix[c * SEGN + i] = (src[k] - mean) / sd; }
+      // Demucs' _spec: reflect-pad, STFT, drop the top bin, keep frames 2 … 2+LE
+      const x = mix.subarray(c * SEGN, (c + 1) * SEGN), padded = new Float32Array(SEGN + PAD + PAD + LE * HOPD - SEGN);
+      for (let i = 0; i < padded.length; i++) { let k = i - PAD; if (k < 0) k = -k; if (k >= SEGN) k = 2 * (SEGN - 1) - k; padded[i] = x[k]; }
+      const { R, I, nb } = stftFrames(padded, NFFT, HOPD, win);
+      for (let f = 0; f < NB; f++) for (let t = 0; t < LE; t++) {
+        mag[((c * 2) * NB + f) * LE + t] = R[(t + 2) * nb + f];
+        mag[((c * 2 + 1) * NB + f) * LE + t] = I[(t + 2) * nb + f];
+      }
+    }
+    const r = await s.run({ mix: new ort.Tensor("float32", mix, [1, 2, SEGN]), mag: new ort.Tensor("float32", mag, [1, 4, NB, LE]) });
+    const spec = r.spec.data, wave = r.wave.data;
+    let mono = new Float32Array(SEGN);
+    for (let c = 0; c < 2; c++) {
+      // Demucs' _ispec: add back the top bin and 2 empty frames each side, inverse STFT, cut the padding
+      const n = LE + 4, nb = NB + 1, R = new Float32Array(n * nb), I = new Float32Array(n * nb);
+      for (let f = 0; f < NB; f++) for (let t = 0; t < LE; t++) {
+        R[(t + 2) * nb + f] = spec[((c * 2) * NB + f) * LE + t];
+        I[(t + 2) * nb + f] = spec[((c * 2 + 1) * NB + f) * LE + t];
+      }
+      const y = istft(R, I, n, nb, NFFT, HOPD, win, HOPD * LE + 2 * PAD);
+      for (let i = 0; i < SEGN; i++) mono[i] += (y[PAD + i] + wave[c * SEGN + i]) / 2;
+    }
+    for (let i = 0; i < len; i++) { out[off + i] += weight[i] * mono[lead + i]; sumW[off + i] += weight[i]; }
+    say("progress", (oi + 1) / offsets.length);
+    await pause();
+  }
+  for (let i = 0; i < L; i++) out[i] = out[i] / sumW[i] * sd + mean / 1;   // (mean of a mono mix; added once)
+  return out;
+}
+
 self.onmessage = async ({ data }) => {
   try {
     base = data.base;
     importScripts(base + "ort/ort.webgpu.min.js");
     ort.env.wasm.wasmPaths = base + "ort/";
     ort.env.wasm.numThreads = 1;                            // (several threads need a page setting GitHub Pages can't give)
+    if (data.model === "demucs") { const piano = await demucsPiano(data.left, data.right); self.postMessage({ type: "done", piano }, [piano.buffer]); return; }
     const r = data.model === "transkun" ? await transkun(data.samples) : data.model === "tkaug" ? await transkun(data.samples, "tkaug") : data.model === "sony" ? await sony(data.samples)
       : data.model === "qmul" ? await bytedance(data.samples, "qmul", "Queen Mary / Yamaha model") : await bytedance(data.samples);
     const { notes, pedal } = Array.isArray(r) ? { notes: r, pedal: null } : r;

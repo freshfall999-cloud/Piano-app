@@ -1740,6 +1740,14 @@
       try { kept = await bestNotes(await resample(decoded, 16000), progress); }
       catch (e) { console.warn("best-quality finder failed:", e); progress("The best-quality finder didn't work on this device; using the standard one…"); }
       finally { freeBest(); }
+    } else if (ui.finder.value === "demucs") {
+      // Demucs pulls the piano out of the song (on 44.1 kHz stereo), then ByteDance's model writes out its notes
+      const [left, right] = await resampleStereo(decoded, 44100); decoded = null;
+      const piano = await demucsPiano(left, right, progress);
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const buf = new OAC(1, piano.length, 44100).createBuffer(1, piano.length, 44100); buf.getChannelData(0).set(piano);
+      kept = await onnxNotes("bytedance", await resample(buf, 16000), progress);
+      if (!kept.length) throw new Error("No piano notes were found in that recording (Demucs found no piano in it).");
     } else if (ONNX_MODELS[ui.finder.value]) {
       const m = ui.finder.value;
       try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" || m === "tkaug" ? 44100 : 16000), progress); }
@@ -1781,6 +1789,26 @@
     const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp)), r = x => Math.round(x * 1000) / 1000;
     const pedal = kept.pedal ? kept.pedal.map(([a, b]) => [r(Math.max(0, a - t0)), r(b - t0)]).filter(([a, b]) => b > a) : null;
     return { notes: kept.map(n => [n.midi, r(n.start - t0), r(n.end - n.start), n.left, Math.round(n.amp / loud * 100) / 100]), pedal };
+  }
+  async function resampleStereo(decoded, rate) {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(2, Math.ceil(decoded.duration * rate), rate), src = off.createBufferSource();
+    src.buffer = decoded; src.connect(off.destination); src.start();
+    const r = await off.startRendering();
+    return [r.getChannelData(0), r.numberOfChannels > 1 ? r.getChannelData(1) : r.getChannelData(0)];
+  }
+  async function demucsPiano(left, right, progress) {
+    progress("Getting Demucs ready (55 MB, only the first time)…");
+    return await new Promise((ok, fail) => {
+      const wk = new Worker("onnx-worker.js?v=4");
+      wk.onmessage = ({ data }) => {
+        if (data.type === "download") progress(`Downloading Demucs… ${Math.round(data.value.f * 100)}% (only the first time)`);
+        else if (data.type === "progress") progress(`Pulling the piano out of the song with Demucs… ${Math.round(data.value * 100)}%`);
+        else { wk.terminate(); data.type === "done" ? ok(data.piano) : fail(new Error(data.message)); }
+      };
+      wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
+      wk.postMessage({ model: "demucs", left, right, base: new URL("vendor/", location.href).href });
+    });
   }
   // the recording in mono at the rate a note finder listens at (the phone's own audio code does the work)
   async function resample(decoded, rate) {
@@ -1842,7 +1870,7 @@
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=3");
+      const wk = new Worker("onnx-worker.js?v=4");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
@@ -1955,6 +1983,7 @@
     simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
     best: "Recommended for piano recordings. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
     transkun: "Solo piano recordings, most accurate in our tests: on 20 test recordings it found 99.4% of the notes with zero wrong ones. Slowest (a few minutes for a song) and downloads 27 MB the first time; it may be too heavy for older iPads. It ignores singing and drums, so use the Songs setting for those.",
+    demucs: "Songs that have a piano in them (pop ballads, covers, band songs): Meta's Demucs (6-stem) first separates the song into drums, bass, singing, guitar, piano and other, then ByteDance's piano model writes out just the piano's notes. Slow (several minutes for a song), downloads 55 MB + 49 MB the first time. If a song has no piano (like most hip-hop), it finds little or nothing: use “Songs → piano version” or MuScriptor for those.",
     tkaug: "Solo piano recordings made on a phone or in a room: Transkun V2 trained with data augmentation (many recording conditions). In its author's tests on pianos it never heard, it found more notes than the regular version (92% vs 88.5% of note starts). Slow, downloads 27 MB the first time.",
     qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
     sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",

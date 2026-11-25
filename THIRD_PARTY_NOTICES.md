@@ -32,6 +32,7 @@ there: they are never uploaded or published.
 | hFT-Transformer code (note extraction ported to JavaScript in `onnx-worker.js`) | — | Sony Group Corporation, github.com/sony/hFT-Transformer | MIT (`vendor/models/LICENSE-sony-code`) |
 | hFT-Transformer weights, converted to ONNX with 16-bit weights | `vendor/models/sony.*` | Copyright (c) 2023 Sony Group Corporation | **CC BY-NC-SA 4.0** (https://creativecommons.org/licenses/by-nc-sa/4.0/): non-commercial use only; this converted copy is shared under the same licence |
 
+| Demucs v4 htdemucs_6s (piano source), converted to ONNX with 16-bit weights; its STFT, inverse STFT and segment blending ported to JavaScript in `onnx-worker.js` | `vendor/models/htdemucs6s_piano.*` | Meta Platforms (Alexandre Défossez), github.com/facebookresearch/demucs | MIT (`vendor/models/LICENSE-demucs`) |
 | MuScriptor: inference loop and token decoding ported to JavaScript in `musc-worker.js`; the model's structure as an ONNX graph **without weights** (`vendor/models/musc_small.onnx`) and its token vocabulary (`musc_vocab.json`) | `musc-worker.js`, `vendor/models/musc_*` | Kyutai and Mirelo, github.com/muscriptor/muscriptor | MIT (code) |
 | MuScriptor weights | **not included** | Kyutai and Mirelo, huggingface.co/MuScriptor | CC BY-NC 4.0, gated: each person downloads them with their own Hugging Face account after accepting the licence, straight to their own device |
 
