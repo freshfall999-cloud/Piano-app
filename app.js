@@ -1821,9 +1821,9 @@
     ai: "Recommended. A trained AI model decides which keys you played, with extra checks so talking and echoes don't count. Small download the first time.",
     simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
     best: "Recommended for piano recordings. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
-    transkun: "Piano recordings, most accurate in our tests: found every note of our hardest test recordings with no wrong ones. Slowest (a few minutes for a song) and downloads 27 MB the first time; it may be too heavy for older iPads.",
-    bytedance: "Piano recordings: ByteDance's model (made by TikTok's research team). Found almost every note in our tests but added some octave echoes. Slow, downloads 49 MB the first time.",
-    song: "For songs with singing, guitar, drums or 808s (it hears every instrument, not just piano). Takes seconds. In our test song it found 30 of 32 sung notes and most of the guitar and bass. Expect some extra notes from the other instruments.",
+    transkun: "Solo piano recordings, most accurate in our tests: found every note of our hardest test recordings with no wrong ones. Slowest (a few minutes for a song) and downloads 27 MB the first time; it may be too heavy for older iPads. It ignores singing and drums, so use the Songs setting for those.",
+    bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found almost every note in our tests but added some octave echoes. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
+    song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
     standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
   };
   function showModelNotes() {
