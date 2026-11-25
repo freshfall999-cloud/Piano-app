@@ -6,7 +6,7 @@ A piano practice app that runs in the browser with no build step: open `index.ht
 - **Play** – the song runs in time; hits are scored (Perfect / Good), with streaks, accuracy and stars.
 - **Listen** – the app plays the song for you.
 - Right hand, left hand or both (the other hand is played for you), adjustable speed.
-- **View: falling notes or sheet music** – sheet music shows a grand staff (treble + bass) that scrolls past a play line; in Practice it stops at each note and waits for you, exactly like the falling notes. Note names can be shown inside the note heads.
+- **View: falling notes or sheet music** – sheet music shows a full, still page of music (grand staff, several lines per page, bar numbers). The note to play lights up and a blue marker shows where you are; in Practice it waits for you, and the page turns by itself when you reach the next line on a new page. Short songs fit on one page, printed as large as the screen allows. Note names can be shown inside the note heads.
 - **Difficulty: Easy / Medium / Hard / Extra hard** for every song, including uploaded recordings – Easy is the melody alone, Medium the melody plus one bass note, Hard every note as written (or as transcribed), Extra hard a fuller version with the melody and bass in octaves (one-hand songs get a bass line added).
 - **Listen (microphone)** – turn on 🎤 Listen and play a real piano; the app hears each note and waits for the right one.
 - **Train on my piano** – play each of the 88 keys once; the app learns how every key sounds through this microphone in this room (and the room's background noise), and listens for each key on the bands where it was actually heard. Training is saved in the browser on that device; untrained keys still use the general listener.

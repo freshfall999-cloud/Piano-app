@@ -1024,7 +1024,8 @@
     W = r.width; H = r.height;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const kbH = Math.max(90, Math.min(H * 0.26, 200));
+    const sheetOn = song && !drill && !train && ui.view.value === "sheet";
+    const kbH = sheetOn ? Math.max(80, Math.min(H * 0.19, 150)) : Math.max(90, Math.min(H * 0.26, 200));
     kbTop = H - kbH;
     let whites = 0;
     grad = null;
@@ -1068,7 +1069,7 @@
     return gr;
   }
 
-  // ---------- Sheet music view: a grand staff that scrolls past a play line (and waits in practice mode) ----------
+  // ---------- Sheet music view: a still page of music; the note to play lights up and pages turn by themselves ----------
   const SHARP_STEP = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6], FLAT_STEP = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
   const LETTERS = "CDEFGAB";
   let sheet = null;                                     // rebuilt when the song, difficulty or screen size changes
@@ -1105,26 +1106,97 @@
       // neighbouring notes of a chord sit on opposite sides of the stem
       for (let i = 1; i < g.items.length; i++) g.items[i].side = g.items[i].step - g.items[i - 1].step === 1 && !g.items[i - 1].side ? 1 : 0;
     }
-    // spacing: the quickest common notes still get room for a note head and its sharp
-    const on = [...new Set(notes.map(n => Math.round(n.start * 20) / 20))].sort((a, b) => a - b);
-    const gaps = on.slice(1).map((t, i) => (t - on[i]) / beat).filter(x => x > 0.05).sort((a, b) => a - b);
-    const quick = gaps.length ? gaps[Math.floor(gaps.length * 0.1)] : 1;
-    let top = 62, bottom = kbTop - 14;
-    const sp = Math.max(6, Math.min(22, (bottom - top) / 21, W / 38));
-    const spare = (bottom - top) - 24 * sp;                         // a tall screen: a paper just big enough, centred
-    if (spare > 0) { top += spare / 2; bottom -= spare / 2; }
-    const h = bottom - top;
-    const trebleTop = top + (h - 14 * sp) / 2, trebleBottom = trebleTop + 4 * sp, bassTop = trebleBottom + 6 * sp, bassBottom = bassTop + 4 * sp;
-    const left = 10, clefW = sp * 5.2;
-    const pxBeat = Math.max(sp * 4.5, Math.min(sp * 16, sp * 3.8 / Math.max(quick, 0.1)));
-    sheet = { groups, flats, sp, top, bottom, left, right: W - 10, clefW, trebleTop, trebleBottom, bassTop, bassBottom,
-      playX: left + Math.max(clefW + sp * 5, W * 0.24), pps: pxBeat / beat, W, kbTop };
+    // ---- page layout: bars packed into lines (systems), lines stacked into pages ----
+    let bl = (song.bars || []).filter(b => b > 0.01);
+    if (!bl.length) for (let t = beat * 4; t < song.end - 0.01; t += beat * 4) bl.push(t);
+    const last = Math.max(song.end, ...groups.map(g => g.start + 0.05));
+    const edges = [0, ...bl.filter(b => b < last - 0.01), last];
+    const bars = [];
+    for (let i = 0; i < edges.length - 1; i++) bars.push({ t0: edges[i], t1: edges[i + 1], cols: [], num: i + 1 });
+    let bi = 0;
+    for (const g of groups.slice().sort((a, b) => a.start - b.start)) {
+      while (bi < bars.length - 1 && g.start >= bars[bi].t1 - 0.03) bi++;
+      const b = bars[bi];
+      let c = b.cols[b.cols.length - 1];
+      if (!c || g.start - c.t > 0.05) { c = { t: g.start, groups: [] }; b.cols.push(c); }
+      c.groups.push(g); g.col = c;
+    }
+    let top = 58, bottom = kbTop - 10;
+    const h = bottom - top, LINE = 21.5;
+    const left = 10, right = W - 10;
+    function pack(sp) {
+      const clefW = sp * 5.4, x0 = left + sp * 2 + clefW, lineW = right - sp * 1.2 - x0;
+      // widths: every note gets room for its head and sharp, longer notes get a little more
+      const minW = sp * 3.8, pad = sp * 2.4, w = d => Math.max(minW, sp * (1.6 + 2.6 * Math.sqrt(Math.max(0.25, d))));
+      for (const b of bars) {
+        b.lead = b.cols.length && (b.cols[0].t - b.t0) / beat > 0.2 ? w((b.cols[0].t - b.t0) / beat) - sp * 1.5 : 0;
+        b.cols.forEach((c, i) => { c.w = w(((i + 1 < b.cols.length ? b.cols[i + 1].t : b.t1) - c.t) / beat); });
+        b.w = b.cols.length ? pad + b.lead + b.cols.reduce((a, c) => a + c.w, 0) : sp * 8;
+      }
+      const systems = [];
+      let cur = null;
+      for (const b of bars) {
+        if (!cur || (cur.w + b.w > lineW && cur.bars.length)) { cur = { bars: [], w: 0 }; systems.push(cur); }
+        cur.bars.push(b); cur.w += b.w;
+      }
+      return { sp, clefW, x0, lineW, pad, systems };
+    }
+    // size: the whole song on one page if it can be read there, otherwise as many lines per page as stay readable
+    let pick = null, most = null;
+    for (let want = 1; want <= 5 && !pick; want++) {
+      const sz = Math.max(5, Math.min(12, W / 48, (h - 8) / (want * LINE)));
+      if (sz < 8.2 && most) break;
+      const P = pack(sz);
+      if (P.systems.length <= want) pick = { P, rows: P.systems.length };
+      else if (sz >= 8.2 || !most) most = { P, rows: Math.max(1, Math.floor((h - 8) / (LINE * sz))) };
+    }
+    if (!pick) pick = { P: most.P, rows: most.rows };
+    else for (let sz = Math.min(12, W / 48); sz > pick.P.sp + 0.2; sz -= 0.25) {   // a song that fits: print it as big as the page allows
+      const P = pack(sz);
+      if (P.systems.length * LINE * sz <= h - 8) { pick = { P, rows: P.systems.length }; break; }
+    }
+    pick.P = pack(pick.P.sp);                             // (the trial sizes above left their widths on the bars)
+    const { sp, clefW, x0, lineW, pad, systems } = pick.P, rows = pick.rows;
+    systems.forEach((s, i) => {
+      const k = i < systems.length - 1 || s.w > lineW * 0.65 ? lineW / s.w : Math.min(1.35, lineW / s.w);
+      let x = x0;
+      s.anchors = [];
+      for (const b of s.bars) {
+        b.x = x; let cx = x + (pad + b.lead) * k;
+        s.anchors.push({ t: b.t0, x: x + sp * 0.9 });
+        for (const c of b.cols) { c.x = cx; s.anchors.push({ t: c.t, x: cx }); cx += c.w * k; }
+        x += b.w * k; b.end = x;
+      }
+      s.t0 = s.bars[0].t0; s.t1 = s.bars[s.bars.length - 1].t1; s.end = x;
+      s.anchors.push({ t: s.t1, x: x - sp * 0.9 });
+      const row = i % rows, slot = (h - 8) / rows;
+      s.trebleTop = top + 4 + row * slot + (slot - 14 * sp) / 2 + sp * 0.4;
+      s.trebleBottom = s.trebleTop + 4 * sp; s.bassTop = s.trebleBottom + 6 * sp; s.bassBottom = s.bassTop + 4 * sp;
+    });
+    sheet = { groups, flats, sp, top, bottom, left, right, clefW, systems, rows, pages: Math.ceil(systems.length / rows),
+      page: 0, from: 0, turnAt: -1e9, W, kbTop };
+  }
+  function sheetSystemAt(t) {
+    const sys = sheet.systems;
+    for (let i = 0; i < sys.length; i++) if (t < sys[i].t1 - 0.02) return i;
+    return sys.length - 1;
+  }
+  function sheetX(s, t) {                                // where time t sits along a line
+    const a = s.anchors;
+    if (t <= a[0].t) return a[0].x;
+    for (let i = 1; i < a.length; i++) if (t <= a[i].t) {
+      const p = a[i].t - a[i - 1].t > 1e-6 ? (t - a[i - 1].t) / (a[i].t - a[i - 1].t) : 1;
+      return a[i - 1].x + (a[i].x - a[i - 1].x) * p;
+    }
+    return a[a.length - 1].x;
   }
   function drawSheet() {
     if (!sheet || sheet.W !== W || sheet.kbTop !== kbTop) buildSheet();
-    const S = sheet, sp = S.sp, now = performance.now();
-    const xOf = t => S.playX + (t - time) * S.pps;
-    const yOf = (staff, step) => staff === "t" ? S.trebleBottom - (step - 30) * sp / 2 : S.bassBottom - (step - 18) * sp / 2;
+    const S = sheet, now = performance.now();
+    // the page holding the line being played; turn it when that line moves on
+    const curSys = sheetSystemAt(Math.max(0, time));
+    const page = Math.floor(curSys / S.rows);
+    if (page !== S.page) { S.from = S.page; S.page = page; S.turnAt = now; }
     // paper
     const pg = ctx.createLinearGradient(0, S.top, 0, S.bottom);
     pg.addColorStop(0, "#fbf8f1"); pg.addColorStop(1, "#ece6d8");
@@ -1132,105 +1204,114 @@
     ctx.fillStyle = pg; rrect(S.left, S.top, S.right - S.left, S.bottom - S.top, 14); ctx.fill();
     ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.save(); rrect(S.left, S.top, S.right - S.left, S.bottom - S.top, 14); ctx.clip();
-    const INK = "#262a36";
-    // staff lines
-    ctx.strokeStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = 1;
-    for (const b of [S.trebleBottom, S.bassBottom]) for (let i = 0; i < 5; i++) {
-      const y = Math.round(b - i * sp) + 0.5; ctx.beginPath(); ctx.moveTo(S.left + 8, y); ctx.lineTo(S.right - 8, y); ctx.stroke();
+    const p = reduceMotion ? 1 : Math.min(1, (now - S.turnAt) / 420);
+    if (p < 1) {                                          // slide the old page out and the new one in
+      const e = 1 - Math.pow(1 - p, 3), dir = S.page > S.from ? 1 : -1, span = S.right - S.left;
+      ctx.save(); ctx.translate(-dir * e * span, 0); drawSheetPage(S.from, -1); ctx.restore();
+      ctx.save(); ctx.translate(dir * (1 - e) * span, 0); drawSheetPage(S.page, curSys); ctx.restore();
+    } else drawSheetPage(S.page, curSys);
+    // page number
+    if (S.pages > 1) {
+      ctx.fillStyle = "rgba(38,42,54,.55)"; ctx.font = `600 ${Math.round(Math.max(11, S.sp * 1.25))}px system-ui, sans-serif`;
+      ctx.textAlign = "right"; ctx.fillText(`Page ${S.page + 1} of ${S.pages}`, S.right - 14, S.bottom - 8);
     }
-    // the play line, with a soft band where the notes to play sit
-    const band = ctx.createLinearGradient(S.playX - sp * 2, 0, S.playX + sp * 2, 0);
-    band.addColorStop(0, "rgba(57,182,255,0)"); band.addColorStop(0.5, "rgba(57,182,255,.16)"); band.addColorStop(1, "rgba(57,182,255,0)");
-    ctx.fillStyle = band; ctx.fillRect(S.playX - sp * 2, S.trebleTop - sp * 3, sp * 4, S.bassBottom - S.trebleTop + sp * 6);
-    // bar lines
-    ctx.fillStyle = "rgba(38,42,54,.8)";
-    for (const b of song.bars) {
-      const x = xOf(b) - sp * 1.7;
-      if (x < S.left + S.clefW || x > S.right) continue;
-      ctx.fillRect(Math.round(x), S.trebleTop, 1.4, S.bassBottom - S.trebleTop);
-    }
-    // notes
+    ctx.restore();
+  }
+  function drawSheetPage(page, curSys) {
+    const S = sheet, sp = S.sp, now = performance.now(), INK = "#262a36";
     const target = new Set(mode() === "practice" && state !== "idle" ? nextGroup().filter(n => n.start - time < 0.02) : []);
     const labels = ui.labels.value === "notes";
     const rx = sp * (labels ? 0.78 : 0.62), ry = sp * (labels ? 0.56 : 0.44);
-    for (const g of S.groups) {
-      const x = xOf(g.start);
-      if (x > S.right + sp * 3) break;
-      if (x < S.left + S.clefW - sp * 4) continue;
-      const past = x < S.playX - sp * 1.5;
-      const bottomLine = g.staff === "t" ? 30 : 18;
-      const isTarget = g.items.some(i => target.has(i.n));
-      // ledger lines
-      ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.globalAlpha = past ? 0.45 : 1;
-      const lo = g.items[0].step, hi = g.items[g.items.length - 1].step;
-      for (let st = bottomLine - 2; st >= lo; st -= 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
-      for (let st = bottomLine + 10; st <= hi; st += 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
-      if (isTarget && !reduceMotion) {
-        const pulse = 0.5 + 0.5 * Math.sin(now / 180);
-        ctx.fillStyle = `rgba(57,182,255,${0.12 + 0.1 * pulse})`;
-        rrect(x - rx * 2.4, yOf(g.staff, hi) - sp * 1.4, rx * 4.8, yOf(g.staff, lo) - yOf(g.staff, hi) + sp * 2.8, sp); ctx.fill();
-      }
-      let stemColor = INK;
-      for (const it of g.items) {
-        const n = it.n, user = isUser(n);
-        const col = n.state === "miss" ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : target.has(n) ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
-          : !user ? "#9aa0ae" : INK;
-        if (it === g.items[g.items.length - 1] || target.has(n)) stemColor = col;
-        const hx = x + (it.side ? (g.up ? rx * 1.9 : -rx * 1.9) : 0), y = yOf(g.staff, it.step);
-        if (target.has(n)) { ctx.shadowColor = col; ctx.shadowBlur = 12; }
-        ctx.fillStyle = ctx.strokeStyle = col;
-        ctx.save(); ctx.translate(hx, y); ctx.rotate(-0.33); ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-        if (g.open) { ctx.lineWidth = sp * 0.2; ctx.stroke(); } else ctx.fill();
-        ctx.restore(); ctx.shadowBlur = 0;
-        if (labels) {
-          ctx.font = `800 ${Math.round(sp * 0.92)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.fillStyle = g.open ? col : "#ffffff"; ctx.fillText(it.name, hx, y + 0.5); ctx.textBaseline = "alphabetic";
-        }
-        if (it.acc) {
-          ctx.fillStyle = col; ctx.font = `700 ${Math.round(sp * 2.1)}px system-ui, serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.fillText(it.acc > 0 ? "♯" : "♭", hx - rx * 2.3, y + (it.acc > 0 ? 0 : -sp * 0.3)); ctx.textBaseline = "alphabetic";
-        }
-        if (g.dot) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + rx * 1.8, y - ((it.step - bottomLine) % 2 === 0 ? sp * 0.25 : 0), sp * 0.17, 0, Math.PI * 2); ctx.fill(); }
-      }
-      if (g.stem) {
-        const sx = g.up ? x + rx * 0.92 : x - rx * 0.92;
-        const yLo = yOf(g.staff, lo), yHi = yOf(g.staff, hi);
-        const y0 = g.up ? yLo : yHi, y1 = g.up ? yHi - sp * 3.4 : yLo + sp * 3.4;
-        ctx.strokeStyle = stemColor; ctx.lineWidth = Math.max(1.2, sp * 0.12);
-        ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, y1); ctx.stroke();
-        ctx.lineWidth = Math.max(1.5, sp * 0.22);
-        for (let f = 0; f < g.flags; f++) {
-          const fy = y1 + (g.up ? 1 : -1) * f * sp * 0.8;
-          ctx.beginPath(); ctx.moveTo(sx, fy);
-          ctx.bezierCurveTo(sx + sp * 0.2, fy + (g.up ? 1 : -1) * sp * 0.9, sx + sp * 1.3, fy + (g.up ? 1 : -1) * sp * 1.2, sx + sp * 0.9, fy + (g.up ? 1 : -1) * sp * 2.2);
-          ctx.stroke();
-        }
-      }
-      ctx.globalAlpha = 1;
-    }
-    // the clefs stay put; notes slide under them
-    const cover = ctx.createLinearGradient(S.left + S.clefW - sp * 2, 0, S.left + S.clefW + sp * 1.5, 0);
-    cover.addColorStop(0, "#f6f2ea"); cover.addColorStop(1, "rgba(246,242,234,0)");
-    ctx.fillStyle = "#f6f2ea"; ctx.fillRect(S.left, S.top, S.clefW - sp * 2, S.bottom - S.top);
-    ctx.fillStyle = cover; ctx.fillRect(S.left + S.clefW - sp * 2, S.top, sp * 3.5, S.bottom - S.top);
-    ctx.strokeStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = 1;
-    for (const b of [S.trebleBottom, S.bassBottom]) for (let i = 0; i < 5; i++) {
-      const y = Math.round(b - i * sp) + 0.5; ctx.beginPath(); ctx.moveTo(S.left + 8, y); ctx.lineTo(S.left + S.clefW - sp * 1.2, y); ctx.stroke();
-    }
-    ctx.fillStyle = INK; ctx.fillRect(S.left + 8 + sp * 0.6, S.trebleTop, 2, S.bassBottom - S.trebleTop);
-    ctx.lineWidth = sp * 0.35; ctx.beginPath();                                   // the brace joining the two staves
-    const bx = S.left + 8 + sp * 0.2, bm = (S.trebleTop + S.bassBottom) / 2;
-    ctx.moveTo(bx, S.trebleTop); ctx.quadraticCurveTo(bx - sp * 0.9, (S.trebleTop + bm) / 2, bx - sp * 0.4, bm);
-    ctx.quadraticCurveTo(bx - sp * 0.9, (bm + S.bassBottom) / 2, bx, S.bassBottom); ctx.stroke();
-    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
     const clefFont = k => `${sp * k}px "Noto Music", "Bravura", "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif`;
-    ctx.font = clefFont(5.6); ctx.fillText("\u{1D11E}", S.left + 8 + sp * 2.6, S.trebleBottom + sp * 0.9);
-    ctx.font = clefFont(3.9); ctx.fillText("\u{1D122}", S.left + 8 + sp * 2.6, S.bassBottom - sp * 0.75);
-    // play line
-    ctx.shadowColor = "#39b6ff"; ctx.shadowBlur = 10; ctx.fillStyle = "rgba(31,134,201,.85)";
-    ctx.fillRect(S.playX - 1, S.trebleTop - sp * 2.5, 2, S.bassBottom - S.trebleTop + sp * 5);
-    ctx.shadowBlur = 0;
-    ctx.restore();
+    const lastSys = S.systems.length - 1;
+    for (let si = page * S.rows; si < Math.min(S.systems.length, (page + 1) * S.rows); si++) {
+      const s = S.systems[si];
+      const yOf = (staff, step) => staff === "t" ? s.trebleBottom - (step - 30) * sp / 2 : s.bassBottom - (step - 18) * sp / 2;
+      const lx = S.left + sp * 2;
+      // staff lines, brace, clefs
+      ctx.strokeStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = 1;
+      for (const b of [s.trebleBottom, s.bassBottom]) for (let i = 0; i < 5; i++) {
+        const y = Math.round(b - i * sp) + 0.5; ctx.beginPath(); ctx.moveTo(lx, y); ctx.lineTo(s.end, y); ctx.stroke();
+      }
+      ctx.fillStyle = INK; ctx.fillRect(lx, s.trebleTop, 1.6, s.bassBottom - s.trebleTop);
+      ctx.strokeStyle = INK; ctx.lineWidth = sp * 0.32; ctx.beginPath();
+      const bx = lx - sp * 0.35, bm = (s.trebleTop + s.bassBottom) / 2;
+      ctx.moveTo(bx, s.trebleTop); ctx.quadraticCurveTo(bx - sp * 0.8, (s.trebleTop + bm) / 2, bx - sp * 0.35, bm);
+      ctx.quadraticCurveTo(bx - sp * 0.8, (bm + s.bassBottom) / 2, bx, s.bassBottom); ctx.stroke();
+      ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = INK;
+      ctx.font = clefFont(5.6); ctx.fillText("\u{1D11E}", lx + sp * 2.4, s.trebleBottom + sp * 0.9);
+      ctx.font = clefFont(3.9); ctx.fillText("\u{1D122}", lx + sp * 2.4, s.bassBottom - sp * 0.75);
+      // bar number above the line
+      ctx.fillStyle = "rgba(38,42,54,.5)"; ctx.font = `italic 600 ${Math.round(Math.max(9, sp * 1.05))}px system-ui, sans-serif`;
+      ctx.textAlign = "left"; ctx.fillText(String(s.bars[0].num), lx, s.trebleTop - sp * 1.2);
+      // bar lines (a double bar at the very end)
+      ctx.fillStyle = "rgba(38,42,54,.85)";
+      for (const b of s.bars) ctx.fillRect(Math.round(b.end) - 1.4, s.trebleTop, 1.4, s.bassBottom - s.trebleTop);
+      if (si === lastSys) { ctx.fillRect(Math.round(s.end) - 4.5, s.trebleTop, 4.5, s.bassBottom - s.trebleTop); ctx.fillRect(Math.round(s.end) - 8.5, s.trebleTop, 1.4, s.bassBottom - s.trebleTop); }
+      // the "you are here" marker on the line being played
+      if (si === curSys && state !== "idle" && time >= s.t0 - 2) {
+        const x = sheetX(s, Math.max(0, time)), y0 = s.trebleTop - sp * 2.2, hh = s.bassBottom - s.trebleTop + sp * 4.4;
+        const band = ctx.createLinearGradient(x - sp * 2, 0, x + sp * 2, 0);
+        band.addColorStop(0, "rgba(57,182,255,0)"); band.addColorStop(0.5, "rgba(57,182,255,.22)"); band.addColorStop(1, "rgba(57,182,255,0)");
+        ctx.fillStyle = band; ctx.fillRect(x - sp * 2, y0, sp * 4, hh);
+        ctx.shadowColor = "#39b6ff"; ctx.shadowBlur = 8; ctx.fillStyle = "rgba(31,134,201,.8)";
+        ctx.fillRect(x - 1, y0, 2, hh); ctx.shadowBlur = 0;
+      }
+      // notes
+      for (const b of s.bars) for (const c of b.cols) for (const g of c.groups) {
+        const x = c.x;
+        const bottomLine = g.staff === "t" ? 30 : 18;
+        const isTarget = g.items.some(i => target.has(i.n));
+        const sounding = mode() !== "practice" && state !== "idle" && g.start <= time + 0.03 && time < g.start + Math.max(0.25, g.dur * 0.9);
+        const past = !isTarget && !sounding && g.start < time - 0.05 && state !== "idle";
+        ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.globalAlpha = past ? 0.6 : 1;
+        const lo = g.items[0].step, hi = g.items[g.items.length - 1].step;
+        for (let st = bottomLine - 2; st >= lo; st -= 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
+        for (let st = bottomLine + 10; st <= hi; st += 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
+        if (isTarget || sounding) {
+          const pulse = reduceMotion ? 0.5 : 0.5 + 0.5 * Math.sin(now / 180);
+          ctx.fillStyle = `rgba(57,182,255,${0.16 + 0.12 * pulse})`;
+          rrect(x - rx * 2.4, yOf(g.staff, hi) - sp * 1.4, rx * 4.8, yOf(g.staff, lo) - yOf(g.staff, hi) + sp * 2.8, sp); ctx.fill();
+        }
+        let stemColor = INK;
+        for (const it of g.items) {
+          const n = it.n, user = isUser(n), lit = target.has(n) || (sounding && (user || mode() === "listen") && n.state !== "hit" && n.state !== "miss");
+          const col = n.state === "miss" ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : lit ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
+            : !user && mode() !== "listen" ? "#9aa0ae" : INK;
+          if (it === g.items[g.items.length - 1] || lit) stemColor = col;
+          const hx = x + (it.side ? (g.up ? rx * 1.9 : -rx * 1.9) : 0), y = yOf(g.staff, it.step);
+          if (lit) { ctx.shadowColor = col; ctx.shadowBlur = 12; }
+          ctx.fillStyle = ctx.strokeStyle = col;
+          ctx.save(); ctx.translate(hx, y); ctx.rotate(-0.33); ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+          if (g.open) { ctx.lineWidth = sp * 0.2; ctx.stroke(); } else ctx.fill();
+          ctx.restore(); ctx.shadowBlur = 0;
+          if (labels) {
+            ctx.font = `800 ${Math.round(sp * 0.92)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillStyle = g.open ? col : "#ffffff"; ctx.fillText(it.name, hx, y + 0.5); ctx.textBaseline = "alphabetic";
+          }
+          if (it.acc) {
+            ctx.fillStyle = col; ctx.font = `700 ${Math.round(sp * 2.1)}px system-ui, serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText(it.acc > 0 ? "♯" : "♭", hx - rx * 2.3, y + (it.acc > 0 ? 0 : -sp * 0.3)); ctx.textBaseline = "alphabetic";
+          }
+          if (g.dot) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + rx * 1.8, y - ((it.step - bottomLine) % 2 === 0 ? sp * 0.25 : 0), sp * 0.17, 0, Math.PI * 2); ctx.fill(); }
+        }
+        if (g.stem) {
+          const sx = g.up ? x + rx * 0.92 : x - rx * 0.92;
+          const yLo = yOf(g.staff, lo), yHi = yOf(g.staff, hi);
+          const y0 = g.up ? yLo : yHi, y1 = g.up ? yHi - sp * 3.4 : yLo + sp * 3.4;
+          ctx.strokeStyle = stemColor; ctx.lineWidth = Math.max(1.2, sp * 0.12);
+          ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, y1); ctx.stroke();
+          ctx.lineWidth = Math.max(1.5, sp * 0.22);
+          for (let f = 0; f < g.flags; f++) {
+            const fy = y1 + (g.up ? 1 : -1) * f * sp * 0.8;
+            ctx.beginPath(); ctx.moveTo(sx, fy);
+            ctx.bezierCurveTo(sx + sp * 0.2, fy + (g.up ? 1 : -1) * sp * 0.9, sx + sp * 1.3, fy + (g.up ? 1 : -1) * sp * 1.2, sx + sp * 0.9, fy + (g.up ? 1 : -1) * sp * 2.2);
+            ctx.stroke();
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
   }
 
   function draw() {
@@ -1671,7 +1752,7 @@
   try { if (localStorage.getItem("keyfall:ai") === "0") ui.ai.checked = false; } catch (e) {}
   ui.ai.onchange = () => { try { localStorage.setItem("keyfall:ai", ui.ai.checked ? "1" : "0"); } catch (e) {} };
   ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };
-  ui.view.onchange = () => { try { localStorage.setItem("keyfall:view", ui.view.value); } catch (e) {} };
+  ui.view.onchange = () => { try { localStorage.setItem("keyfall:view", ui.view.value); } catch (e) {} sheet = null; layout(); };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
   ui.mic.onclick = toggleMic;
   ui.restart.onclick = () => { reset(); start(); };
@@ -1684,5 +1765,5 @@
   layout(); songChanged(); showHome();
   requestAnimationFrame(frame);
 
-  window.__keyfall = { mic, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
 })();
