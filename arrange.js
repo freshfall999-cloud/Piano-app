@@ -189,10 +189,14 @@
     const overlap = tr => { let o = 0; const ns = tr.notes; for (let i = 1; i < ns.length; i++) if (ns[i].start < ns[i - 1].end - 0.05) o++; return o / ns.length; };
     const isVoice = tr => /voc|vox|voice|sing|lead|melod/i.test(tr.name) || (tr.program >= 52 && tr.program <= 54) || (tr.program >= 80 && tr.program <= 87) || (tr.program >= 56 && tr.program <= 79);
     const isBass = tr => /bass/i.test(tr.name) || (tr.program >= 32 && tr.program <= 39);
-    let mel = tracks.filter(isVoice).sort((a, b) => b.notes.length - a.notes.length)[0];
-    if (!mel) mel = tracks.filter(t => !isBass(t)).sort((a, b) => (overlap(a) - overlap(b)) || (avg(b) - avg(a)))[0];
+    // the singer (or a lead instrument) if it plays enough to carry the tune; otherwise the busiest other instrument
+    const most = Math.max(...tracks.map(t => t.notes.length)), enough = t => t.notes.length >= Math.max(8, 0.15 * most);
+    let mel = tracks.filter(t => isVoice(t) && enough(t)).sort((a, b) => b.notes.length - a.notes.length)[0];
+    if (!mel) mel = tracks.filter(t => !isBass(t) && enough(t)).sort((a, b) => b.notes.length - a.notes.length || avg(b) - avg(a))[0]
+      || tracks.filter(t => !isBass(t)).sort((a, b) => b.notes.length - a.notes.length)[0] || tracks[0];
     const bassTr = tracks.filter(t => t !== mel && isBass(t))[0] || tracks.filter(t => t !== mel).sort((a, b) => avg(a) - avg(b))[0];
-    const rest = tracks.filter(t => t !== mel);
+    // chords from everything but a singer (an instrument playing the tune also plays the harmony)
+    const rest = tracks.filter(t => !(t === mel && isVoice(t)));
     // the pitches heard on each beat, as if a note finder had heard them, for the chord finder
     const end = Math.max(...tracks.flatMap(t => t.notes.map(n => n.end)));
     const T = Math.ceil(end * FPS) + 1, frames = new Float32Array(T * P);

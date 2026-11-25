@@ -23,3 +23,7 @@ Converted piano transcription models (PyTorch → ONNX, weights stored as 16-bit
   MIT, see LICENSE-demucs; weights from dl.fbaipublicfiles.com). Converted without its STFT / inverse STFT (done in
   `onnx-worker.js`) and with only the piano source as output. In the browser, with Demucs' own 7.8 s pieces, 25%
   overlap and triangular blending, it matches the original (correlation 1.00000, 54 dB) on a 20 s test mix.
+- `ymt3_encoder.*`, `ymt3_decoder.*`, `ymt3_vocab.json` — YourMT3+ (YPTF.MoE+Multi, noPS) by Sungkyun Chang, Emmanouil
+  Benetos, Holger Kirchhoff and Simon Dixon (MLSP 2024, arXiv:2407.04822); weights Apache-2.0
+  (huggingface.co/mimbres/YourMT3). Taken from the unofficial ONNX export huggingface.co/ONLY4DarkKnight/YourMT3-plus-onnx
+  (Apache-2.0, see NOTICE-ymt3.md) and stored as 16-bit floats. Trained partly on non-commercial datasets.

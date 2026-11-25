@@ -1758,21 +1758,17 @@
       if (!token) throw new Error("MuScriptor needs your Hugging Face token first (see Note recognition above).");
       const s16 = await resample(decoded, 16000), s22 = await resample(decoded, 22050); decoded = null;
       const r = await muscNotes(s16, s22, token, progress);
-      const tracks = new Map();
-      for (const [pitch, start, end, program] of r.notes) {
-        if (program < 0 || pitch < 21 || pitch > 108) continue;                    // drums aren't played on the piano
-        if (!tracks.has(program)) tracks.set(program, { name: "program " + program, program, notes: [] });
-        tracks.get(program).notes.push({ midi: pitch, start, end: Math.max(end, start + 0.05) });
-      }
-      const all = [...tracks.values()];
-      if (!all.length) throw new Error("No notes were found in that recording.");
-      const piano = all.every(t => t.program < 8);
-      if (!piano && r.flux) {
-        const bt = KeyfallArrange.beats(r.flux).times;
-        const a = KeyfallArrange.fromTracks(all, bt);
-        if (a && a.notes.length) return a;
-      }
-      kept = all.flatMap(t => t.notes.map(n => ({ midi: n.midi, start: n.start, end: n.end, amp: 0.8 }))).sort((a, b) => a.start - b.start || a.midi - b.midi);
+      const a = bandToPiano(r.notes, r.flux);
+      if (!Array.isArray(a)) return a;
+      kept = a;
+    }
+    if (ui.finder.value === "ymt3") {
+      const s16 = await resample(decoded, 16000), s22 = await resample(decoded, 22050); decoded = null;
+      const r = await ymt3Notes(s16, s22, progress);
+      const names = r.programs || {};
+      const a = bandToPiano(r.notes, r.flux, p => (names[p] && names[p][1]) || "program " + p);
+      if (!Array.isArray(a)) return a;
+      kept = a;
     }
     if (ui.finder.value === "arrange") {
       // a full song → a piano arrangement: melody in the right hand, bass and chords in the left, on the beat
@@ -1885,6 +1881,39 @@
     kept.pedal = notes.pedal || null;                       // Transkun also hears the sustain pedal
     return kept;
   }
+  // A whole band's notes ([pitch, start, end, program], drums as program -1) → a piano part: an arrangement
+  // (melody right hand, bass + chords left) when there are other instruments, or the notes as they are for piano.
+  function bandToPiano(notes, flux, nameOf = p => "program " + p) {
+    const tracks = new Map();
+    for (const [pitch, start, end, program] of notes) {
+      if (program < 0 || pitch < 21 || pitch > 108) continue;                    // drums aren't played on the piano
+      if (!tracks.has(program)) tracks.set(program, { name: nameOf(program), program, notes: [] });
+      tracks.get(program).notes.push({ midi: pitch, start, end: Math.max(end, start + 0.05) });
+    }
+    const all = [...tracks.values()];
+    if (!all.length) throw new Error("No notes were found in that recording.");
+    if (!all.every(t => t.program < 8) && flux) {
+      const a = KeyfallArrange.fromTracks(all, KeyfallArrange.beats(flux).times);
+      if (a && a.notes.length) return a;
+    }
+    return all.flatMap(t => t.notes.map(n => ({ midi: n.midi, start: n.start, end: n.end, amp: 0.8 }))).sort((a, b) => a.start - b.start || a.midi - b.midi);
+  }
+  // YourMT3+ (Chang, Benetos, Kirchhoff, Dixon) in ymt3-worker.js: every instrument, no account needed
+  async function ymt3Notes(s16, s22, progress) {
+    progress("Getting YourMT3+ ready (95 MB, only the first time)…");
+    return await new Promise((ok, fail) => {
+      const wk = new Worker("ymt3-worker.js?v=1");
+      wk.onmessage = ({ data }) => {
+        if (data.type === "download") progress(`Downloading the ${data.value.label}… ${Math.round(data.value.f * 100)}% (only the first time)`);
+        else if (data.type === "progress") {
+          const { piece, pieces, secs } = data.value, left = Math.round(secs / piece * (pieces - piece) / 60);
+          progress(`Writing out every instrument with YourMT3+… ${Math.round(piece / pieces * 100)}% (about ${left < 1 ? 1 : left} min left)`);
+        } else { wk.terminate(); data.type === "done" ? ok(data) : fail(new Error(data.message)); }
+      };
+      wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
+      wk.postMessage({ samples: s16, samples22: s22, base: new URL("vendor/", location.href).href });
+    });
+  }
   // MuScriptor (Kyutai & Mirelo) in musc-worker.js. Its weights are gated on Hugging Face: each person downloads them
   // with their own token, straight from huggingface.co to their device, where they're kept for next time.
   const hfToken = () => { try { return localStorage.getItem("keyfall:hftoken") || ""; } catch (e) { return ""; } };
@@ -1975,7 +2004,7 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "muscriptor", "transkun", "tkaug", "bytedance", "qmul", "sony", "demucs"].includes(v)) ui.finder.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "muscriptor", "ymt3", "transkun", "tkaug", "bytedance", "qmul", "sony", "demucs"].includes(v)) ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
   // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
   const MODEL_NOTES = {
@@ -1988,6 +2017,7 @@
     qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
     sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
     bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
+    ymt3: "YourMT3+ (Queen Mary University of London and others), a well-known model that writes out every instrument in a song, singing and drums included; Keyfall turns that into a two-hand piano part. Free and no account needed. Slow (several minutes or more for a song) and downloads 95 MB the first time. In our test it was very precise (almost no wrong notes) but missed some of our synthetic singing and 808 bass.",
     muscriptor: "Kyutai's MuScriptor, the most accurate model for full songs: it writes out every instrument, singing included, and Keyfall turns that into a two-hand piano part (the singer in the right hand, bass and chords in the left). It runs on this iPad, but it's big and slow: a 412 MB download the first time (then kept), and several minutes or more per song; older iPads may not manage it. Its makers ask each person to use their own free Hugging Face account: set it up once below. (Free for personal, non-commercial use, for music you have the right to transcribe.)",
     arrange: "Recommended for songs with singing and beats, like hip-hop and pop: instead of writing down every sound, it finds the beat, the chords and the main melody and makes a piano version (melody in the right hand, bass and chords in the left, lined up on the beat), like a piano cover. Takes seconds.",
     song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
