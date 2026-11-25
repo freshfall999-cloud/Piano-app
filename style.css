@@ -173,3 +173,6 @@ button.primary:hover { background: linear-gradient(#63c0ff, #2b86e0); }
 .mrow select { flex: 1 1 220px; min-width: 0; }
 .mnote { margin: 6px 0 12px; color: #9fb0cc; font-size: 13px; }
 .credit a { color: #8fb4e8; }
+
+.mlink { display: inline-block; margin: -4px 0 12px; padding: 8px 14px; border-radius: 10px; background: linear-gradient(#4fb6ff, #2478d0); color: #fff; font-weight: 700; text-decoration: none; }
+.mlink[hidden] { display: none; }

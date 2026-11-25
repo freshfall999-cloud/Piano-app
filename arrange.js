@@ -181,5 +181,57 @@
       chords: seq.map(k => k ? NAMES[k.root] + (k.minor ? "m" : "") : "-"),
     };
   }
-  window.KeyfallArrange = { arrange, beats, chords, melody };
+  // ---------- a band's MIDI file (vocals, guitar, bass, drums… on separate tracks) → a two-hand piano part ----------
+  // The singer (or lead) becomes the right hand; the bass line and the chords of everything else the left hand.
+  function fromTracks(tracks, bt) {
+    if (bt.length < 4) return null;
+    const avg = tr => tr.notes.reduce((a, n) => a + n.midi, 0) / tr.notes.length;
+    const overlap = tr => { let o = 0; const ns = tr.notes; for (let i = 1; i < ns.length; i++) if (ns[i].start < ns[i - 1].end - 0.05) o++; return o / ns.length; };
+    const isVoice = tr => /voc|vox|voice|sing|lead|melod/i.test(tr.name) || (tr.program >= 52 && tr.program <= 54) || (tr.program >= 80 && tr.program <= 87) || (tr.program >= 56 && tr.program <= 79);
+    const isBass = tr => /bass/i.test(tr.name) || (tr.program >= 32 && tr.program <= 39);
+    let mel = tracks.filter(isVoice).sort((a, b) => b.notes.length - a.notes.length)[0];
+    if (!mel) mel = tracks.filter(t => !isBass(t)).sort((a, b) => (overlap(a) - overlap(b)) || (avg(b) - avg(a)))[0];
+    const bassTr = tracks.filter(t => t !== mel && isBass(t))[0] || tracks.filter(t => t !== mel).sort((a, b) => avg(a) - avg(b))[0];
+    const rest = tracks.filter(t => t !== mel);
+    // the pitches heard on each beat, as if a note finder had heard them, for the chord finder
+    const end = Math.max(...tracks.flatMap(t => t.notes.map(n => n.end)));
+    const T = Math.ceil(end * FPS) + 1, frames = new Float32Array(T * P);
+    for (const t of rest) for (const n of t.notes) {
+      const p = Math.min(87, Math.max(0, n.midi - 21)), w = t === bassTr ? 1.5 : 1;
+      for (let f = Math.round(n.start * FPS); f < Math.min(T, Math.round(n.end * FPS)); f++) frames[f * P + p] = Math.max(frames[f * P + p], w);
+    }
+    const times = bt.filter(t => t <= end + 0.01);
+    const seq = chords(frames, times);
+    const beat = (times[times.length - 1] - times[0]) / (times.length - 1);
+    const posOf = t => { let i = 0; while (i < times.length - 2 && times[i + 1] <= t) i++; return i + (t - times[i]) / (times[i + 1] - times[i]); };
+    const out = [];
+    // right hand: the melody, one note at a time (the top one where the singer overlaps), into the right hand's range
+    const mn = (mel ? mel.notes : []).slice().sort((a, b) => a.start - b.start || b.midi - a.midi);
+    let shift = 0; if (mn.length) { const a = mn.reduce((x, n) => x + n.midi, 0) / mn.length; while (a + shift < 60) shift += 12; while (a + shift > 79) shift -= 12; }
+    let last = -1;
+    for (const n of mn) {
+      const pos = Math.round(posOf(n.start) * 4) / 4; if (pos <= last) continue;
+      out.push({ midi: n.midi + shift, pos, len: Math.max(0.25, Math.round((posOf(n.end) - posOf(n.start)) * 4) / 4), left: 0, amp: 0.9 }); last = pos;
+    }
+    out.forEach((n, i) => { const nx = out[i + 1]; if (nx && n.pos + n.len > nx.pos) n.len = nx.pos - n.pos; });
+    // left hand: bass note + chord at each chord change and every bar (bars from the file start on beat 0)
+    let i = 0;
+    while (i < seq.length) {
+      const k = seq[i]; let j = i + 1;
+      while (j < seq.length && seq[j] === k && j % 4 !== 0) j++;
+      if (k) {
+        let b = 36 + k.root; if (b < 40) b += 12;
+        const third = (k.root + (k.minor ? 3 : 4)) % 12, fifth = (k.root + 7) % 12;
+        out.push({ midi: b, pos: i, len: j - i, left: 1, amp: 0.8 });
+        for (const pc of [k.root, third, fifth]) { let m = 48 + pc; if (m > 57) m -= 12; if (m > b + 4) out.push({ midi: m, pos: i, len: j - i, left: 1, amp: 0.6 }); }
+      }
+      i = j;
+    }
+    if (!out.length) return null;
+    out.sort((a, b) => a.pos - b.pos || a.midi - b.midi);
+    const p0 = out[0].pos, r = x => Math.round(x * 1000) / 1000;
+    return { notes: out.map(n => [n.midi, r((n.pos - p0) * beat), r(Math.max(0.1, n.len * beat) * 0.95), n.left, n.amp]),
+      pedal: [], beat: r(beat), bar0: r((((0 - p0) % 4) + 4) % 4 * beat) };
+  }
+  window.KeyfallArrange = { arrange, beats, chords, melody, fromTracks };
 })();

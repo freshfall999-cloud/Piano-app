@@ -253,19 +253,21 @@
       if (id !== "MTrk") { p = end; continue; }
       let tick = 0, status = 0;
       const open = {}, notes = [];
-      let pedAt = null;
+      let pedAt = null, name = "", program = -1;
       while (p < end) {
         tick += vlq();
         if (d.getUint8(p) & 0x80) status = d.getUint8(p++);
         if (status === 0xff) {
           const type = d.getUint8(p++), l = vlq();
           if (type === 0x51) tempos.push([tick, (d.getUint8(p) << 16) | (d.getUint8(p + 1) << 8) | d.getUint8(p + 2)]);
+          if (type === 0x03 && !name) for (let i = 0; i < l; i++) name += String.fromCharCode(d.getUint8(p + i));
           p += l;
         } else if (status === 0xf0 || status === 0xf7) { const l = vlq(); p += l; }
         else {
           const cmd = status & 0xf0, ch = status & 15, a = d.getUint8(p++);
           const b = cmd === 0xc0 || cmd === 0xd0 ? 0 : d.getUint8(p++);
           if (ch === 9) continue;                                   // drums
+          if (cmd === 0xc0 && program < 0) program = a;
           if (cmd === 0xb0 && a === 64) {                           // sustain pedal
             if (b >= 64 && pedAt === null) pedAt = tick;
             else if (b < 64 && pedAt !== null) { pedals.push([pedAt, tick]); pedAt = null; }
@@ -279,7 +281,7 @@
         }
       }
       p = end;
-      if (notes.length) tracks.push(notes);
+      if (notes.length) { notes.name = name; notes.program = program; tracks.push(notes); }
     }
     if (!tracks.length) throw new Error("No notes found in that file.");
     tempos.sort((a, b) => a[0] - b[0]);
@@ -289,8 +291,15 @@
       segs.push({ tick, sec: l.sec + (tick - l.tick) * l.us / div / 1e6, us });
     }
     const sec = tick => { let g = segs[0]; for (const x of segs) { if (x.tick > tick) break; g = x; } return g.sec + (tick - g.tick) * g.us / div / 1e6; };
-    // hands: the track with the highest average pitch is the right hand; one track is split at middle C
     const avg = tr => tr.reduce((a, n) => a + n.midi, 0) / tr.length;
+    // a whole band (from MuScriptor or any multi-instrument MIDI): make a two-hand piano part of it
+    const piano = tr => tr.program < 8 && !/voc|vox|voice|sing|lead|melod|bass|guit|gtr|synth|string/i.test(tr.name);
+    if (tracks.filter(tr => !piano(tr)).length >= 2 && window.KeyfallArrange) {
+      const bt = []; for (let k = 0; sec(k * div) < 3600; k++) { bt.push(sec(k * div)); if (tracks.every(tr => tr.every(n => n.t1 < k * div))) break; }
+      const arr = KeyfallArrange.fromTracks(tracks.map(tr => ({ name: tr.name, program: tr.program, notes: tr.map(n => ({ midi: n.midi, start: sec(n.t0), end: sec(n.t1) })) })), bt);
+      if (arr) return arr;
+    }
+    // hands: the track with the highest average pitch is the right hand; one track is split at middle C
     const top = tracks.reduce((a, b) => avg(b) > avg(a) ? b : a);
     const out = [];
     for (const tr of tracks) for (const n of tr)
@@ -1866,12 +1875,15 @@
     try {
       let got;
       if (isMidi) got = parseMidi(await f.arrayBuffer());
-      else {
+      else if (ui.finder.value === "muscriptor") {
+        msg.textContent = "MuScriptor works on its own website: upload this song at muscriptor.kyutai.org, download the MIDI file it makes, then add that MIDI file here.";
+        return;
+      } else {
         $("importBtn").classList.add("busy");
         got = await transcribe(f, t => { msg.textContent = t; });
       }
       const notes = got.notes;
-      SONGS.push({ title, by: isMidi ? "Imported" : got.beat ? "Piano arrangement" : "From a recording", level: "My songs", notes,
+      SONGS.push({ title, by: got.beat ? "Piano arrangement" : isMidi ? "Imported" : "From a recording", level: "My songs", notes,
         ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}), ...(got.beat ? { beat: got.beat, bar0: got.bar0 } : {}) });
       saveImported(); refreshOptions();
       msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.`;
@@ -1893,7 +1905,7 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "transkun", "bytedance", "qmul", "sony"].includes(v)) ui.finder.value = v; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (["standard", "best", "song", "arrange", "muscriptor", "transkun", "bytedance", "qmul", "sony"].includes(v)) ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} showModelNotes(); };
   // ---------- Note recognition: which model hears the piano, and which turns recordings into notes ----------
   const MODEL_NOTES = {
@@ -1904,6 +1916,7 @@
     qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
     sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
     bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
+    muscriptor: "Kyutai's MuScriptor, the most accurate model for full songs (every instrument, singing included). It's too big to run inside this app, so it runs free on its own website: open it below, upload your song, download the MIDI file, then add that MIDI file here with “＋ Add your own song”. Keyfall turns the band's MIDI into a two-hand piano part: the singer in the right hand, the bass and chords in the left. (Free for personal, non-commercial use, for music you have the right to transcribe.)",
     arrange: "Recommended for songs with singing and beats, like hip-hop and pop: instead of writing down every sound, it finds the beat, the chords and the main melody and makes a piano version (melody in the right hand, bass and chords in the left, lined up on the beat), like a piano cover. Takes seconds.",
     song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
     standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
@@ -1911,6 +1924,7 @@
   function showModelNotes() {
     $("listenerNote").textContent = MODEL_NOTES[ui.listener.value];
     $("finderNote").textContent = MODEL_NOTES[ui.finder.value];
+    $("muscriptorLink").hidden = ui.finder.value !== "muscriptor";
   }
   try { const v = localStorage.getItem("keyfall:listener") || (localStorage.getItem("keyfall:ai") === "0" ? "simple" : ""); if (v === "ai" || v === "simple") ui.listener.value = v; } catch (e) {}
   ui.listener.onchange = () => {
