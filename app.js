@@ -1729,11 +1729,10 @@
   }
   async function transcribe(file, progress) {
     progress("Reading the recording…");
-    const data = await file.arrayBuffer();
-    let decoded = await new Promise((ok, fail) => {
-      const pr = audio().decodeAudioData(data, ok, () => fail(new Error("decode")));
-      if (pr && pr.then) pr.then(ok, () => fail(new Error("decode")));
-    });
+    let data;
+    try { data = await file.arrayBuffer(); }
+    catch (e) { throw new Error("couldn't open the file (" + (e && (e.name || e.message)) + "). If it's in iCloud Drive, open it in the Files app first so it downloads, then try again"); }
+    let decoded = await decodeAudio(data);
     if (decoded.duration > 12 * 60) throw new Error("That recording is longer than 12 minutes. Try a shorter one.");
     let kept = null;
     if (ui.finder.value === "best") {
@@ -1805,6 +1804,24 @@
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
       wk.postMessage({ model: "demucs", left, right, base: new URL("vendor/", location.href).href });
     });
+  }
+  // Turn the file's bytes into sound. First with the page's audio context; if that fails (iOS sometimes refuses
+  // while the sound system is interrupted or busy), with a separate offline one. Each try gets its own copy of the
+  // bytes, because decoding uses them up.
+  async function decodeAudio(data) {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext, errs = [];
+    const tries = [() => audio(), () => new OAC(2, 44100, 44100), () => new OAC(1, 44100, 48000)];
+    for (const make of tries) {
+      try {
+        const ctx = make(); if (!ctx) continue;
+        return await new Promise((ok, fail) => {
+          const pr = ctx.decodeAudioData(data.slice(0), ok, e => fail(e || new Error("unknown")));
+          if (pr && pr.then) pr.then(ok, fail);
+        });
+      } catch (e) { errs.push((e && (e.name || e.message)) || "unknown"); }
+    }
+    console.warn("decoding failed:", errs);
+    const err = new Error("decode"); err.detail = errs.join(", "); throw err;
   }
   // the recording in mono at the rate a note finder listens at (the phone's own audio code does the work)
   async function resample(decoded, rate) {
@@ -1993,7 +2010,7 @@
       const m = (e && e.message) || "";
       msg.textContent = /MIDI|notes|minutes|load|Hugging Face/.test(m) ? m
         : isMidi ? "Couldn't read that file. It needs to be a .mid file."
-        : m === "decode" ? "Couldn't read that recording. Try an MP3, M4A or WAV file."
+        : m === "decode" ? "Couldn't read that recording (" + (e.detail || "no details") + "). Try an MP3, M4A or WAV file."
         : "That note finder ran into a problem (" + m.slice(0, 160) + "). Try another “MP3 → notes” choice, and tell Claude what it said.";
     } finally { $("importBtn").classList.remove("busy"); }
   };
