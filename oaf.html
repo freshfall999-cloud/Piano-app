@@ -6,12 +6,26 @@
 <script>
   let model = null, loading = null;
   window.ready = () => loading || (loading = (async () => { const m = new mm.OnsetsAndFrames("vendor/magenta/onsets_frames/"); await m.initialize(); model = m; })());
-  window.transcribe = async (samples, rate) => {
+  // The model would take the whole song in one go, which needs far more memory than an iPad has for a long song.
+  // So it hears 20 seconds at a time; each piece overlaps its neighbours by 2 seconds and keeps only the notes
+  // that start in its middle part, so no note is lost or counted twice at the joins.
+  window.transcribe = async (samples, rate, onProgress) => {
     await window.ready();
-    const ctx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, samples.length, rate);
-    const buf = ctx.createBuffer(1, samples.length, rate);
-    buf.getChannelData(0).set(samples);
-    const ns = await model.transcribeFromAudioBuffer(buf);
-    return ns.notes.map(n => ({ pitch: n.pitch, start: n.startTime || 0, end: n.endTime || 0, velocity: n.velocity || 80 }));
+    const SEG = 20, EDGE = 2, len = samples.length, step = (SEG - 2 * EDGE) * rate, out = [];
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    for (let s0 = 0; s0 < len; s0 += step) {
+      const a = Math.max(0, s0 - EDGE * rate), b = Math.min(len, s0 + step + EDGE * rate);
+      const buf = new OAC(1, b - a, rate).createBuffer(1, b - a, rate);
+      buf.getChannelData(0).set(samples.subarray(a, b));
+      const ns = await model.transcribeFromAudioBuffer(buf);
+      const from = s0 / rate, to = s0 + step >= len ? Infinity : (s0 + step) / rate;
+      for (const n of ns.notes) {
+        const start = (n.startTime || 0) + a / rate;
+        if (start >= from - (s0 ? 0 : 1) && start < to) out.push({ pitch: n.pitch, start, end: (n.endTime || 0) + a / rate, velocity: n.velocity || 80 });
+      }
+      if (onProgress) onProgress(Math.min(1, (s0 + step) / len));
+      await new Promise(r => setTimeout(r, 0));     // let the screen draw between pieces
+    }
+    return out;
   };
 </script>

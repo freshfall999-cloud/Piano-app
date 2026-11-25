@@ -1606,12 +1606,7 @@
   try { const v = localStorage.getItem("keyfall:sens"); if (SENS[v]) ui.sens.value = v; } catch (e) {}
   ui.sens.onchange = () => { try { localStorage.setItem("keyfall:sens", ui.sens.value); } catch (e) {} };
   ui.dClef.onchange = ui.dLedger.onchange = ui.dAcc.onchange = () => { if (drill) nextDrill(); };
-  // ---------- Recording → notes (Spotify's Basic Pitch, run on this device) ----------
-  const loadScript = src => new Promise((ok, fail) => {
-    const el = document.createElement("script");
-    el.src = src; el.onload = ok; el.onerror = () => fail(new Error("Couldn't load " + src));
-    document.head.append(el);
-  });
+  // ---------- Recording → notes (Basic Pitch or Onsets and Frames, run on this device) ----------
   // notes struck together (within 50 ms)
   function clusters(notes) {
     const out = [];
@@ -1634,37 +1629,41 @@
     }
   }
   async function transcribe(file, progress) {
-    progress("Getting the note finder ready…");
-    if (window.KeyfallML) await KeyfallML.prepare();       // loads the model and picks the fastest back-end
-    else if (!window.tf) await loadScript("vendor/tf.min.js");
-    if (!window.BasicPitchLib) await loadScript("vendor/basic-pitch/basic-pitch.js");
     progress("Reading the recording…");
-    const data = await file.arrayBuffer(), ctx = audio();
-    const decoded = await new Promise((ok, fail) => {
-      const pr = ctx.decodeAudioData(data, ok, () => fail(new Error("decode")));
+    const data = await file.arrayBuffer();
+    let decoded = await new Promise((ok, fail) => {
+      const pr = audio().decodeAudioData(data, ok, () => fail(new Error("decode")));
       if (pr && pr.then) pr.then(ok, () => fail(new Error("decode")));
     });
     if (decoded.duration > 12 * 60) throw new Error("That recording is longer than 12 minutes. Try a shorter one.");
     let kept = null;
     if (ui.finder.value === "best") {
-      try { kept = await bestNotes(decoded, progress); }
+      try { kept = await bestNotes(await resample(decoded, 16000), progress); }
       catch (e) { console.warn("best-quality finder failed:", e); progress("The best-quality finder didn't work on this device; using the standard one…"); }
+      finally { freeBest(); }
     }
-    if (!kept) kept = await standardNotes(decoded, progress);
+    if (!kept) { const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress); }
     if (!kept.length) throw new Error("No piano notes were found in that recording.");
     assignHands(kept);
     const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp));
     return kept.map(n => [n.midi, Math.round((n.start - t0) * 1000) / 1000, Math.round((n.end - n.start) * 1000) / 1000, n.left, Math.round(n.amp / loud * 100) / 100]);
   }
+  // the recording in mono at the rate a note finder listens at (the phone's own audio code does the work)
+  async function resample(decoded, rate) {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new OAC(1, Math.ceil(decoded.duration * rate), rate), src = off.createBufferSource();
+    src.buffer = decoded; src.connect(off.destination); src.start();
+    return (await off.startRendering()).getChannelData(0);
+  }
   // Google Magenta's Onsets and Frames: made only for piano, the most accurate on our test recordings (99% of notes,
   // almost no extra ones) but slower, and a 60 MB download the first time
   // It runs in a hidden frame of its own: it brings an older TensorFlow.js that must not mix with the one used here.
-  let oafFrame = null;
+  let oafFrame = null, oafEl = null;
   function bestFrame() {
     if (oafFrame) return oafFrame;
     oafFrame = new Promise((ok, fail) => {
-      const f = document.createElement("iframe");
-      f.hidden = true; f.src = "oaf.html?v=1";
+      const f = oafEl = document.createElement("iframe");
+      f.hidden = true; f.src = "oaf.html?v=2";
       f.onload = () => f.contentWindow.ready ? ok(f.contentWindow) : fail(new Error("frame"));
       f.onerror = () => fail(new Error("frame"));
       document.body.append(f);
@@ -1672,42 +1671,60 @@
     oafFrame.catch(() => { oafFrame = null; });
     return oafFrame;
   }
-  async function bestNotes(decoded, progress) {
+  function freeBest() {                                  // the model holds 60 MB: let it go until the next recording
+    if (oafEl) oafEl.remove();
+    oafEl = null; oafFrame = null;
+  }
+  async function bestNotes(samples, progress) {
     progress("Downloading the best-quality note finder (60 MB, only the first time)…");
-    const w = await bestFrame();
-    await w.ready();
-    const t0 = performance.now();
-    const tick = setInterval(() => progress(`Finding every note with the best-quality finder… ${Math.round((performance.now() - t0) / 1000)} s (a few minutes for a long song)`), 1000);
+    const say = f => progress(`Finding every note with the best-quality finder… ${Math.round(f * 100)}%`);
     let notes;
-    try { notes = await w.transcribe(decoded.getChannelData(0).slice(), decoded.sampleRate); } finally { clearInterval(tick); }
+    try {
+      // first choice: a worker, so the screen stays smooth
+      notes = await new Promise((ok, fail) => {
+        const wk = new Worker("oaf-worker.js?v=1");
+        wk.onmessage = ({ data }) => {
+          if (data.type === "progress") say(data.value);
+          else { wk.terminate(); data.type === "done" ? ok(data.notes.map(([pitch, start, end, velocity]) => ({ pitch, start, end, velocity }))) : fail(new Error(data.message)); }
+        };
+        wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
+        wk.postMessage({ samples });
+      });
+    } catch (e) {
+      // older iPads can't use the graphics chip from a worker: run it on the page, a piece at a time
+      console.warn("best-quality worker unavailable:", e);
+      const w = await bestFrame();
+      await w.ready();
+      say(0);
+      notes = await w.transcribe(samples, 16000, say);
+    }
     return notes.filter(n => n.pitch >= 21 && n.pitch <= 108 && n.end - n.start >= 0.03)
       .map(n => ({ midi: n.pitch, start: n.start, end: n.end, amp: n.velocity / 127 }))
       .sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
-  async function standardNotes(decoded, progress) {
-    // the model listens at 22,050 samples a second, in mono
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const off = new OAC(1, Math.ceil(decoded.duration * 22050), 22050), src = off.createBufferSource();
-    src.buffer = decoded; src.connect(off.destination); src.start();
-    const mono = await off.startRendering();
-    const { BasicPitch, outputToNotesPoly, addPitchBendsToNoteEvents, noteFramesToTime } = BasicPitchLib;
-    const bp = new BasicPitch("vendor/basic-pitch/model.json");
-    const frames = [], onsets = [], contours = [];
-    await bp.evaluateModel(mono.getChannelData(0), (f, o, c) => { frames.push(...f); onsets.push(...o); contours.push(...c); },
-      pct => progress(`Finding the notes… ${Math.round(pct * 100)}%`));
-    window.__bpRaw = { frames, onsets };                 // kept for automated accuracy tests
-    // thresholds tuned on piano recordings with known notes (10 pieces): 97% of notes found, almost no extra ones
-    const found = noteFramesToTime(outputToNotesPoly(frames, onsets, 0.7, 0.45, 7, true, null, null, false, 11));
+  // Spotify's Basic Pitch, in a worker of its own (import-worker.js) so the screen stays smooth
+  async function standardNotes(samples, progress) {
+    progress("Finding the notes… 0%");
+    const base = new URL("vendor/", location.href).href;
+    const found = await new Promise((ok, fail) => {
+      const wk = new Worker("import-worker.js?v=1");
+      wk.onmessage = ({ data }) => {
+        if (data.type === "progress") progress(`Finding the notes… ${Math.round(data.value * 100)}%`);
+        else { wk.terminate(); if (data.type === "done") { if (data.raw) window.__bpRaw = data.raw; ok(data.notes); } else fail(new Error(data.message)); }
+      };
+      wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
+      wk.postMessage({ base, samples, keepRaw: !!window.__keepBpRaw });
+    });
     // keep real piano notes: very short blips and very quiet echoes go, and a key "struck" twice within 80 ms is one strike.
-    // (The thresholds above already split notes only at real strikes, so repeated notes stay separate.)
-    const loud = Math.max(...found.map(n => n.amplitude), 0);
-    const kept = [], lastOf = {};       // (Basic Pitch)
-    for (const n of found.filter(n => n.pitchMidi >= 21 && n.pitchMidi <= 108 && n.durationSeconds >= 0.06 && n.amplitude >= loud * 0.12)
-      .sort((x, y) => x.startTimeSeconds - y.startTimeSeconds)) {
-      const prev = lastOf[n.pitchMidi], s0 = n.startTimeSeconds, s1 = s0 + n.durationSeconds;
+    // (The thresholds already split notes only at real strikes, so repeated notes stay separate.)
+    const loud = Math.max(...found.map(n => n[3]), 0);
+    const kept = [], lastOf = {};
+    for (const [midi, s0, dur, amp] of found.filter(n => n[0] >= 21 && n[0] <= 108 && n[2] >= 0.06 && n[3] >= loud * 0.12)
+      .sort((x, y) => x[1] - y[1])) {
+      const prev = lastOf[midi], s1 = s0 + dur;
       if (prev && s0 - prev.start < 0.08) { prev.end = Math.max(prev.end, s1); continue; }
-      const k = { midi: n.pitchMidi, start: s0, end: s1, amp: n.amplitude };
-      kept.push(k); lastOf[n.pitchMidi] = k;
+      const k = { midi, start: s0, end: s1, amp };
+      kept.push(k); lastOf[midi] = k;
     }
     return kept;
   }
