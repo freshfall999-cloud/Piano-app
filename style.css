@@ -176,3 +176,6 @@ button.primary:hover { background: linear-gradient(#63c0ff, #2b86e0); }
 
 .mlink { display: inline-block; margin: -4px 0 12px; padding: 8px 14px; border-radius: 10px; background: linear-gradient(#4fb6ff, #2478d0); color: #fff; font-weight: 700; text-decoration: none; }
 .mlink[hidden] { display: none; }
+#updateBar { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px 10px 18px; border-radius: 14px; background: linear-gradient(#2b3550, #1d2436); color: #fff; font-weight: 600;
+  box-shadow: 0 10px 30px rgba(0,0,0,.5), inset 0 0 0 1px rgba(127,212,255,.3); max-width: calc(100vw - 32px); }

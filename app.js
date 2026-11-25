@@ -1947,6 +1947,22 @@
 
   window.addEventListener("resize", () => { layout(); grad = null; });
   layout(); songChanged(); showHome();
+  // Safari keeps the page for a while after an update: if the server has a newer version, offer it
+  async function checkForUpdate() {
+    try {
+      const mine = ([...document.scripts].map(x => x.src).find(x => /app\.js\?v=/.test(x)) || "").match(/v=(\d+)/);
+      if (!mine) return;
+      const html = await (await fetch("index.html?check=" + Date.now(), { cache: "no-store" })).text();
+      const live = (html.match(/app\.js\?v=(\d+)/) || [])[1];
+      if (!live || live === mine[1] || document.getElementById("updateBar")) return;
+      const bar = document.createElement("div"); bar.id = "updateBar";
+      const b = document.createElement("button"); b.className = "primary"; b.textContent = "Update now";
+      b.onclick = () => location.replace(location.pathname + "?v=" + live);
+      bar.append("A new version of Keyfall is ready. ", b); document.body.append(bar);
+    } catch (e) {}
+  }
+  checkForUpdate();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
   requestAnimationFrame(frame);
 
   window.__keyfall = { held: () => [...autoDown.keys()].length, get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
