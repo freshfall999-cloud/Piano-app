@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Keyfall — Piano Practice</title>
-<link rel="stylesheet" href="style.css?v=202611251452">
+<link rel="stylesheet" href="style.css?v=202611251532">
 </head>
 <body>
 <header id="bar">
@@ -142,7 +142,16 @@
         </select>
       </label>
       <p class="mnote" id="finderNote"></p>
-      <a class="mlink" id="muscriptorLink" href="https://muscriptor.kyutai.org/" target="_blank" rel="noopener" hidden>Open the MuScriptor website ↗</a>
+      <div class="muscbox" id="muscBox" hidden>
+        <ol>
+          <li>Make a free account at <a href="https://huggingface.co/join" target="_blank" rel="noopener">huggingface.co</a>.</li>
+          <li>Open <a href="https://huggingface.co/MuScriptor/muscriptor-small" target="_blank" rel="noopener">MuScriptor's model page</a> and agree to its licence to get access.</li>
+          <li>Make a token with <b>Read</b> access at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a>, and paste it here. It stays on this iPad and is only sent to huggingface.co.</li>
+        </ol>
+        <div class="hfrow"><input id="hfToken" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false"><button id="hfSave">Save</button></div>
+        <p class="mnote" id="hfState"></p>
+        <p class="mnote">Or use it on <a href="https://muscriptor.kyutai.org/" target="_blank" rel="noopener">MuScriptor's own website</a> (faster: their computers do the work), download the MIDI file and add it here.</p>
+      </div>
     </div>
     <label class="sensrow"><input type="checkbox" id="sfx" checked> Sound effects</label>
     <label class="sensrow"><input type="checkbox" id="ignoreTalk" checked> Ignore talking (turn off if very short, staccato notes are missed)</label>
@@ -154,10 +163,10 @@
     <p class="credit">Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0). Recordings are turned into notes on this device with Spotify's Basic Pitch, Google Magenta's Onsets and Frames, ByteDance's piano transcription (Apache 2.0; weights CC BY 4.0, Qiuqiang Kong et al.) Transkun (MIT, Yujia Yan and Zhiyao Duan), the same ByteDance network re-trained by Edwards, Dixon, Benetos, Maezawa and Kusaka (Queen Mary University of London and Yamaha; weights CC BY 4.0) or Sony's hFT-Transformer (Toyama et al.; code MIT, weights CC BY-NC-SA 4.0, non-commercial), run with ONNX Runtime Web (MIT). <a href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">Credits and licences</a>.</p>
   </div>
 </div>
-<script src="listen-ml.js?v=202611251452"></script>
-<script src="arrange.js?v=202611251452"></script>
-<script src="sound.js?v=202611251452"></script>
-<script src="songs.js?v=202611251452"></script>
-<script src="app.js?v=202611251452"></script>
+<script src="listen-ml.js?v=202611251532"></script>
+<script src="arrange.js?v=202611251532"></script>
+<script src="sound.js?v=202611251532"></script>
+<script src="songs.js?v=202611251532"></script>
+<script src="app.js?v=202611251532"></script>
 </body>
 </html>

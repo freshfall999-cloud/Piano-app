@@ -1745,6 +1745,27 @@
       try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" ? 44100 : 16000), progress); }
       catch (e) { console.warn(m + " finder failed:", e); progress("That note finder didn't work on this device; using the standard one…"); }
     }
+    if (ui.finder.value === "muscriptor") {
+      const token = hfToken();
+      if (!token) throw new Error("MuScriptor needs your Hugging Face token first (see Note recognition above).");
+      const s16 = await resample(decoded, 16000), s22 = await resample(decoded, 22050); decoded = null;
+      const r = await muscNotes(s16, s22, token, progress);
+      const tracks = new Map();
+      for (const [pitch, start, end, program] of r.notes) {
+        if (program < 0 || pitch < 21 || pitch > 108) continue;                    // drums aren't played on the piano
+        if (!tracks.has(program)) tracks.set(program, { name: "program " + program, program, notes: [] });
+        tracks.get(program).notes.push({ midi: pitch, start, end: Math.max(end, start + 0.05) });
+      }
+      const all = [...tracks.values()];
+      if (!all.length) throw new Error("No notes were found in that recording.");
+      const piano = all.every(t => t.program < 8);
+      if (!piano && r.flux) {
+        const bt = KeyfallArrange.beats(r.flux).times;
+        const a = KeyfallArrange.fromTracks(all, bt);
+        if (a && a.notes.length) return a;
+      }
+      kept = all.flatMap(t => t.notes.map(n => ({ midi: n.midi, start: n.start, end: n.end, amp: 0.8 }))).sort((a, b) => a.start - b.start || a.midi - b.midi);
+    }
     if (ui.finder.value === "arrange") {
       // a full song → a piano arrangement: melody in the right hand, bass and chords in the left, on the beat
       const mono = await resample(decoded, 22050); decoded = null;
@@ -1836,6 +1857,30 @@
     kept.pedal = notes.pedal || null;                       // Transkun also hears the sustain pedal
     return kept;
   }
+  // MuScriptor (Kyutai & Mirelo) in musc-worker.js. Its weights are gated on Hugging Face: each person downloads them
+  // with their own token, straight from huggingface.co to their device, where they're kept for next time.
+  const hfToken = () => { try { return localStorage.getItem("keyfall:hftoken") || ""; } catch (e) { return ""; } };
+  async function muscNotes(s16, s22, token, progress) {
+    progress("Getting MuScriptor ready…");
+    return await new Promise((ok, fail) => {
+      const wk = new Worker("musc-worker.js?v=1");
+      wk.onmessage = ({ data }) => {
+        if (data.type === "download") progress(`Downloading MuScriptor… ${Math.round(data.value * 100)}% (412 MB, only the first time)`);
+        else if (data.type === "status") progress(data.value === "download" ? "Getting MuScriptor (412 MB the first time, then it's kept on this iPad)…" : data.value === "load" ? "Loading MuScriptor…" : "Writing out every instrument…");
+        else if (data.type === "progress") {
+          const { chunk, chunks, secs } = data.value, left = chunk ? Math.round(secs / chunk * (chunks - chunk) / 60) : null;
+          progress(`Writing out every instrument with MuScriptor… ${Math.round(chunk / chunks * 100)}%` + (left !== null ? ` (about ${left < 1 ? "1" : left} min left)` : ""));
+        } else {
+          wk.terminate();
+          if (data.type === "done") ok(data);
+          else fail(new Error(data.message === "hf-auth" ? "Hugging Face didn't accept that token: check it, and that you accepted MuScriptor's licence on its model page." : data.message));
+        }
+      };
+      wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
+      const test = window.__muscTest || {};                 // (automated tests use a small stand-in model)
+      wk.postMessage({ size: test.size || "small", samples: s16, samples22: s22, token, weightsUrl: test.url || "https://huggingface.co/MuScriptor/muscriptor-small/resolve/main/model.safetensors", base: new URL("vendor/", location.href).href });
+    });
+  }
   // Spotify's Basic Pitch, in a worker of its own (import-worker.js) so the screen stays smooth
   async function standardNotes(samples, progress, tune) {
     progress("Finding the notes… 0%");
@@ -1875,10 +1920,7 @@
     try {
       let got;
       if (isMidi) got = parseMidi(await f.arrayBuffer());
-      else if (ui.finder.value === "muscriptor") {
-        msg.textContent = "MuScriptor works on its own website: upload this song at muscriptor.kyutai.org, download the MIDI file it makes, then add that MIDI file here.";
-        return;
-      } else {
+      else {
         $("importBtn").classList.add("busy");
         got = await transcribe(f, t => { msg.textContent = t; });
       }
@@ -1891,7 +1933,7 @@
       showHome();
     } catch (e) {
       console.warn("import failed:", e);
-      msg.textContent = e && /MIDI|notes|minutes|load/.test(e.message || "") ? e.message
+      msg.textContent = e && /MIDI|notes|minutes|load|Hugging Face/.test(e.message || "") ? e.message
         : isMidi ? "Couldn't read that file. It needs to be a .mid file." : "Couldn't read that recording. Try an MP3, M4A or WAV file.";
     } finally { $("importBtn").classList.remove("busy"); }
   };
@@ -1916,7 +1958,7 @@
     qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
     sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
     bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
-    muscriptor: "Kyutai's MuScriptor, the most accurate model for full songs (every instrument, singing included). It's too big to run inside this app, so it runs free on its own website: open it below, upload your song, download the MIDI file, then add that MIDI file here with “＋ Add your own song”. Keyfall turns the band's MIDI into a two-hand piano part: the singer in the right hand, the bass and chords in the left. (Free for personal, non-commercial use, for music you have the right to transcribe.)",
+    muscriptor: "Kyutai's MuScriptor, the most accurate model for full songs: it writes out every instrument, singing included, and Keyfall turns that into a two-hand piano part (the singer in the right hand, bass and chords in the left). It runs on this iPad, but it's big and slow: a 412 MB download the first time (then kept), and several minutes or more per song; older iPads may not manage it. Its makers ask each person to use their own free Hugging Face account: set it up once below. (Free for personal, non-commercial use, for music you have the right to transcribe.)",
     arrange: "Recommended for songs with singing and beats, like hip-hop and pop: instead of writing down every sound, it finds the beat, the chords and the main melody and makes a piano version (melody in the right hand, bass and chords in the left, lined up on the beat), like a piano cover. Takes seconds.",
     song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
     standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
@@ -1924,7 +1966,8 @@
   function showModelNotes() {
     $("listenerNote").textContent = MODEL_NOTES[ui.listener.value];
     $("finderNote").textContent = MODEL_NOTES[ui.finder.value];
-    $("muscriptorLink").hidden = ui.finder.value !== "muscriptor";
+    $("muscBox").hidden = ui.finder.value !== "muscriptor";
+    $("hfState").textContent = hfToken() ? "✓ Your Hugging Face token is saved on this iPad." : "";
   }
   try { const v = localStorage.getItem("keyfall:listener") || (localStorage.getItem("keyfall:ai") === "0" ? "simple" : ""); if (v === "ai" || v === "simple") ui.listener.value = v; } catch (e) {}
   ui.listener.onchange = () => {
@@ -1933,6 +1976,11 @@
     if (mic.on && window.KeyfallML) { if (ui.listener.value === "ai") KeyfallML.start(ac, mic.src); else KeyfallML.stop(); }   // switch while listening
   };
   showModelNotes();
+  $("hfSave").onclick = () => {
+    const v = $("hfToken").value.trim();
+    try { if (v) localStorage.setItem("keyfall:hftoken", v); else localStorage.removeItem("keyfall:hftoken"); } catch (e) {}
+    $("hfToken").value = ""; showModelNotes();
+  };
   try { if (localStorage.getItem("keyfall:pedal") === "off") ui.pedal.value = "off"; } catch (e) {}
   ui.pedal.onchange = () => { try { localStorage.setItem("keyfall:pedal", ui.pedal.value); } catch (e) {} reset(); };
   ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };

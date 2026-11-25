@@ -13,3 +13,7 @@ Converted piano transcription models (PyTorch → ONNX, weights stored as 16-bit
   Weights (and this converted copy of them): Copyright (c) 2023 Sony Group Corporation, CC BY-NC-SA 4.0
   (creativecommons.org/licenses/by-nc-sa/4.0/), trained on MAESTRO v3.0.0: non-commercial use only, share alike.
   `sony_mel.json` is torchaudio's mel filter bank for its input (16 kHz, 2048-point FFT, 256 bands, Slaney norm).
+- `musc_small.onnx` / `musc_small.json` / `musc_vocab.json` — MuScriptor (Kyutai and Mirelo, 2026; code MIT): the small
+  model's transformer as an ONNX graph that holds **no weights** (each weight refers by name to the tensor of the same
+  name in the official, gated `model.safetensors`, which each user downloads with their own Hugging Face token), and
+  the MT3 token vocabulary. The weights are CC BY-NC 4.0 and are never part of this repository.
