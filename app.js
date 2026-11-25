@@ -2073,6 +2073,11 @@
     } catch (e) {}
   }
   checkForUpdate();
+  {                                                         // which version this is, at the bottom of the song list
+    const v = (([...document.scripts].map(x => x.src).find(x => /app\.js\?v=/.test(x)) || "").match(/v=(\d{8})(\d{4})/));
+    const credit = document.querySelector(".credit");
+    if (v && credit) { const e = document.createElement("span"); e.className = "version"; e.textContent = ` Version ${v[1].slice(4, 6)}/${v[1].slice(6)} ${v[2].slice(0, 2)}:${v[2].slice(2)} UTC.`; credit.append(e); }
+  }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
   requestAnimationFrame(frame);
 
