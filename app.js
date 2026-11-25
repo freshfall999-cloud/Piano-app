@@ -114,8 +114,10 @@
     if (def.notes) {                     // imported song: [midi, start, duration, isLeft, loudness]
       for (const [midi, start, dur, left, amp] of def.notes)
         notes.push({ midi, start, dur, amp, hand: left ? "left" : "right", state: "pending", played: false });
-      end = Math.max(...notes.map(n => n.start + n.dur));
+      notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
       beat = guessBeat(notes);
+      closeGaps(notes, beat);
+      end = Math.max(...notes.map(n => n.start + n.dur));
       for (let t = 0; t < end; t += beat * 4) bars.push(t);
     } else {
       const lb = [];
@@ -127,7 +129,32 @@
     notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
     // if both hands strike the same key at the same moment, keep one note
     const uniq = notes.filter((n, i) => !(i && notes[i - 1].midi === n.midi && Math.abs(notes[i - 1].start - n.start) < 1e-6));
+    if (def.notes) letRing(uniq, beat);
     return { def, notes: uniq, end, beat, bars: bars.filter(b => b > 0.01 && b < end - 0.01) };
+  }
+  // A recording can go quiet for a while (a long pause, a silent stretch, notes the finder couldn't hear):
+  // shorten any silence longer than 4 beats (at least 2.5 s) to 2 beats, so the song doesn't stop dead.
+  function closeGaps(notes, beat) {
+    const long = Math.max(2.5, beat * 4);
+    let shift = 0, prev = null;
+    for (const n of notes) {
+      const s = n.start;
+      if (prev !== null && s - prev > long) shift += s - prev - beat * 2;
+      prev = s; n.start = s - shift; n.dur = Math.min(n.dur, long);
+    }
+  }
+  // The note finder hears where a key's sound fades, which with the pedal down is long before the next note:
+  // played back as heard it sounds choppy, with little silences. Let each note ring on to the next note
+  // in the same hand (up to 2 beats), as a pianist's fingers or pedal would.
+  function letRing(notes, beat) {
+    for (const hand of ["left", "right"]) {
+      const hs = notes.filter(n => n.hand === hand);
+      let j = 0;
+      for (const n of hs) {
+        while (j < hs.length && hs[j].start <= n.start + 0.03) j++;
+        if (j < hs.length) n.dur = Math.max(n.dur, Math.min(hs[j].start - n.start, beat * 2));
+      }
+    }
   }
   // a recording has no written tempo: take the typical time between notes as the beat (between 0.35 and 0.9 s)
   function guessBeat(notes) {
@@ -1764,7 +1791,7 @@
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:view"); if (v === "sheet") ui.view.value = v; } catch (e) {}
-  try { if (localStorage.getItem("keyfall:finder") === "best") ui.finder.value = "best"; } catch (e) {}
+  try { const v = localStorage.getItem("keyfall:finder"); if (v === "standard" || v === "best") ui.finder.value = v; } catch (e) {}
   ui.finder.onchange = () => { try { localStorage.setItem("keyfall:finder", ui.finder.value); } catch (e) {} };
   try { if (localStorage.getItem("keyfall:ai") === "0") ui.ai.checked = false; } catch (e) {}
   ui.ai.onchange = () => { try { localStorage.setItem("keyfall:ai", ui.ai.checked ? "1" : "0"); } catch (e) {} };
