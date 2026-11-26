@@ -2569,7 +2569,7 @@
   async function demucsPiano(left, right, progress) {
     progress("Getting Demucs ready (55 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=9");
+      const wk = new Worker("onnx-worker.js?v=10");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading Demucs… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Pulling the piano out of the song with Demucs… ${Math.round(data.value * 100)}%`);
@@ -2652,12 +2652,12 @@
       .sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
   // Transkun or ByteDance's piano model, with ONNX Runtime in a worker (onnx-worker.js)
-  const ONNX_MODELS = { transkun: ["Transkun", 27], tkaug: ["Transkun V2 Aug", 27], qmul: ["Queen Mary / Yamaha", 49], bytedance: ["ByteDance", 49], sony: ["Sony", 11] };
+  const ONNX_MODELS = { transkun: ["Transkun", 27], tkaug: ["Transkun V2 Aug", 27], qmul: ["Queen Mary / Yamaha", 86], bytedance: ["ByteDance", 86], sony: ["Sony", 11] };
   async function onnxNotes(model, samples, progress) {
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=9");
+      const wk = new Worker("onnx-worker.js?v=10");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
@@ -2833,20 +2833,25 @@
     simple: "Starts instantly and works on any device, but talking, echoes and loud rooms fool it more often.",
     best: "Recommended for piano recordings. Made just for piano: found 99% of the notes in our tests, with almost no wrong ones. Slower, and downloads 60 MB the first time.",
     transkun: "Solo piano recordings, most accurate in our tests: on 20 test recordings it found 99.4% of the notes with zero wrong ones. Slowest (a few minutes for a song) and downloads 27 MB the first time; it may be too heavy for older iPads. It ignores singing and drums, so use the Songs setting for those.",
-    demucs: "Songs that have a piano in them (pop ballads, covers, band songs): Meta's Demucs (6-stem) first separates the song into drums, bass, singing, guitar, piano and other, then ByteDance's piano model writes out just the piano's notes. Slow (several minutes for a song), downloads 55 MB + 49 MB the first time. If a song has no piano (like most hip-hop), it finds little or nothing: use “Songs → piano version” or MuScriptor for those.",
+    demucs: "Songs that have a piano in them (pop ballads, covers, band songs): Meta's Demucs (6-stem) first separates the song into drums, bass, singing, guitar, piano and other, then ByteDance's piano model writes out just the piano's notes. Slow (several minutes for a song), downloads 55 MB + 86 MB the first time. Also finds the sustain pedal. If a song has no piano (like most hip-hop), it finds little or nothing: use “Songs → piano version” or MuScriptor for those.",
     tkaug: "Solo piano recordings made on a phone or in a room: Transkun V2 trained with data augmentation (many recording conditions). In its author's tests on pianos it never heard, it found more notes than the regular version (92% vs 88.5% of note starts). Slow, downloads 27 MB the first time.",
-    qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Slow, downloads 49 MB the first time.",
-    sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time. (Free for personal, non-commercial use.)",
-    bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Slow, downloads 49 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
+    qmul: "Solo piano recordings, made for real-world recordings: ByteDance's model re-trained by Queen Mary University of London and Yamaha on many pianos and rooms, so it adds far fewer wrong notes: on 20 test recordings it found 99.6% of the notes with 41 wrong ones (ByteDance's original: 289). Also finds the sustain pedal (with ByteDance's pedal model). Slow, downloads 86 MB the first time.",
+    sony: "Solo piano recordings: Sony's hFT-Transformer. Found 99.5% of the notes in our tests but added octave echoes (265 wrong notes in 20 recordings). The slowest of all; downloads 11 MB the first time.",
+    bytedance: "Solo piano recordings: ByteDance's model (made by TikTok's research team). Found 99.4% of the notes in our tests but added octave echoes (289 wrong notes in 20 recordings); the Queen Mary / Yamaha version of it is better. Also finds the sustain pedal. Slow, downloads 86 MB the first time. Not for songs with singing: it mostly ignores other instruments.",
     ymt3: "YourMT3+ (Queen Mary University of London and others), a well-known model that writes out every instrument in a song, singing and drums included; Keyfall turns that into a two-hand piano part. Free and no account needed. Slow (several minutes or more for a song) and downloads 95 MB the first time. In our test it was very precise (almost no wrong notes) but missed some of our synthetic singing and 808 bass.",
     muscriptor: "Kyutai's MuScriptor, the most accurate model for full songs: it writes out every instrument, singing included, and Keyfall turns that into a two-hand piano part (the singer in the right hand, bass and chords in the left). It runs on this iPad, but it's big and slow: a 412 MB download the first time (then kept), and several minutes or more per song; older iPads may not manage it. Its makers ask each person to use their own free Hugging Face account: set it up once below. (Free for personal, non-commercial use, for music you have the right to transcribe.)",
     arrange: "Recommended for songs with singing and beats, like hip-hop and pop: instead of writing down every sound, it finds the beat, the chords and the main melody and makes a piano version (melody in the right hand, bass and chords in the left, lined up on the beat), like a piano cover. Takes seconds.",
     song: "Best for songs with singing, guitar, drums or 808s, like hip-hop and pop: it hears every instrument, not just piano. Takes seconds. On a 4-minute hip-hop song it followed the music better than any of the piano models, and on our test song it found 30 of 32 sung notes. Expect some extra notes from the other instruments.",
     standard: "For piano recordings, when you want it quick: takes seconds. Found about 91% of the notes in our tests: it can miss a note played twice in a row, or add one.",
   };
+  // whether each model's licence allows it in a business (selling the app, ads, a paid service)
+  const NON_COMMERCIAL = { sony: "Sony's licence", muscriptor: "MuScriptor's licence" };
+  const bizNote = m => m === "simple" ? "" : NON_COMMERCIAL[m] ? ` ⚠️ Personal use only: ${NON_COMMERCIAL[m]} doesn't allow business (commercial) use.`
+    : m === "ymt3" ? " ✅ Its licence (Apache 2.0) allows business use, but part of what it was trained on was for non-commercial use only: check before using it in a business."
+    : " ✅ Its licence allows business use (with credit to its makers, as in the app's notices).";
   function showModelNotes() {
-    $("listenerNote").textContent = MODEL_NOTES[ui.listener.value];
-    $("finderNote").textContent = MODEL_NOTES[ui.finder.value];
+    $("listenerNote").textContent = MODEL_NOTES[ui.listener.value] + bizNote(ui.listener.value);
+    $("finderNote").textContent = MODEL_NOTES[ui.finder.value] + bizNote(ui.finder.value);
     $("muscBox").hidden = ui.finder.value !== "muscriptor";
     $("hfState").textContent = hfToken() ? "✓ Your Hugging Face token is saved on this iPad." : "";
   }

@@ -52,6 +52,12 @@ Our test recordings are synthesized pianos, whose strong overtones seem to cause
 
 Third-party files and their licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Note: the Sony model's weights are CC BY-NC-SA 4.0, so the app must stay non-commercial while it includes them.
 
+**Business (commercial) use, model by model** (each model's note in the app says the same):
+- Allowed (with credit, as in the notices): Spotify Basic Pitch (Apache 2.0), Google Onsets and Frames (Apache 2.0), Transkun and Transkun V2 Aug (MIT), ByteDance note and pedal models (CC BY 4.0), Queen Mary / Yamaha (CC BY 4.0), Demucs (MIT).
+- Allowed by its licence, but trained partly on non-commercial data: YourMT3+ (Apache 2.0).
+- Personal use only: Sony hFT-Transformer (CC BY-NC-SA 4.0), MuScriptor (CC BY-NC 4.0; not included, each person downloads it).
+- Checked and not added: Aria-AMT (code Apache 2.0, but its weights are published in a CC BY-NC-SA dataset, and 450 MB), Pop2Piano (no licence given, so no permission), Onsets & Velocities (GPL 3, and about 5 s behind when listening live). The 2025 low-latency piano models from JKU Linz and Kyoto University have no released weights.
+
 When releasing an update, run `./bump-version.sh` so browsers fetch the new code instead of a cached copy.
 
 Built-in songs live in `songs.js` as simple note strings and are all public-domain melodies.

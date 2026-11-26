@@ -2,6 +2,7 @@
 //  · ByteDance's "high-resolution piano transcription" (Kong et al. 2020, Apache 2.0; weights CC BY 4.0)
 //  · the same network re-trained by Queen Mary University of London and Yamaha for other pianos and rooms
 //    (Edwards, Dixon, Benetos, Maezawa & Kusaka 2024; weights CC BY 4.0)
+//    (the notes; ByteDance's pedal model finds the sustain pedal for both)
 //  · Transkun (Yujia Yan & Zhiyao Duan, MIT)
 //  · Sony's hFT-Transformer (Toyama et al. 2023; code MIT, weights CC BY-NC-SA 4.0: non-commercial use)
 // The models were converted from PyTorch to ONNX; their weights are stored as 16-bit floats (half the download)
@@ -69,6 +70,7 @@ async function session(name, label) {
     s = await create(["wasm"]);
   };
   return {
+    release() { try { s.release && s.release(); } catch (e) {} s = null; weights = null; },
     async run(feeds) {
       if (!onGpu) return await s.run(feeds);
       let out;
@@ -83,41 +85,65 @@ async function session(name, label) {
 const pause = () => new Promise(r => setTimeout(r, 0));
 
 // ---------- ByteDance: 10-second pieces, half overlapping; regression outputs → notes ----------
-async function bytedance(audio, name = "bytedance", label = "ByteDance model") {
-  const s = await session(name, label);
+// run a ByteDance-style network over the recording in 10-second pieces, half overlapping, and join its outputs
+async function kongRun(s, audio, keys, P, share = [0, 1]) {
   const SEG = 160000, len = audio.length, padded = Math.ceil(len / SEG) * SEG;
   const x = new Float32Array(padded); x.set(audio);
   const starts = []; for (let p = 0; p + SEG <= padded; p += SEG / 2) starts.push(p);
-  const keys = ["onset", "offset", "frame", "velocity"], P = 88;
-  const parts = { onset: [], offset: [], frame: [], velocity: [] };
+  const parts = Object.fromEntries(keys.map(k => [k, []]));
   for (let i = 0; i < starts.length; i++) {
     const out = await s.run({ audio: new ort.Tensor("float32", x.slice(starts[i], starts[i] + SEG), [1, SEG]) });
     // keep the middle half of each piece (the first piece keeps its start, the last its end), as the original does
     const n = starts.length, frames = n === 1 ? 1001 : 1000, a = n === 1 || i === 0 ? 0 : 250, b = n === 1 || i === n - 1 ? frames : 750;
     for (const k of keys) parts[k].push(out[k].data.slice(a * P, b * P));
-    for (const k of keys) out[k].dispose && out[k].dispose();
-    say("progress", (i + 1) / starts.length);
+    for (const k of Object.keys(out)) out[k].dispose && out[k].dispose();
+    say("progress", share[0] + share[1] * (i + 1) / starts.length);
     await pause();
   }
   const join = k => { const L = parts[k].reduce((a, p) => a + p.length, 0), o = new Float32Array(L); let at = 0; for (const p of parts[k]) { o.set(p, at); at += p.length; } return o; };
-  const reg = { onset: join("onset"), offset: join("offset"), frame: join("frame"), velocity: join("velocity") };
-  const T = reg.frame.length / P;
-  // a peak in the regression curve that clears the threshold and rises/falls steadily on both sides is an onset/offset;
-  // its exact time comes from the neighbouring values
-  function binarize(r, thr, nb) {
-    const on = new Uint8Array(T * P), shift = new Float32Array(T * P);
-    for (let k = 0; k < P; k++) for (let n = nb; n < T - nb; n++) {
-      const v = i => r[i * P + k];
-      if (!(v(n) > thr)) continue;
-      let mono = true;
-      for (let i = 0; i < nb; i++) { if (v(n - i) < v(n - i - 1)) mono = false; if (v(n + i) < v(n + i + 1)) mono = false; }
-      if (!mono) continue;
-      on[n * P + k] = 1;
-      shift[n * P + k] = v(n - 1) > v(n + 1) ? (v(n + 1) - v(n - 1)) / (v(n) - v(n + 1)) / 2 : (v(n + 1) - v(n - 1)) / (v(n) - v(n - 1)) / 2;
-    }
-    return [on, shift];
+  return Object.fromEntries(keys.map(k => [k, join(k)]));
+}
+// a peak in a regression curve (P values per frame) that clears the threshold and rises/falls steadily on both
+// sides is an onset/offset; its exact time comes from the neighbouring values
+function binarize(r, P, thr, nb) {
+  const T = r.length / P, on = new Uint8Array(T * P), shift = new Float32Array(T * P);
+  for (let k = 0; k < P; k++) for (let n = nb; n < T - nb; n++) {
+    const v = i => r[i * P + k];
+    if (!(v(n) > thr)) continue;
+    let mono = true;
+    for (let i = 0; i < nb; i++) { if (v(n - i) < v(n - i - 1)) mono = false; if (v(n + i) < v(n + i + 1)) mono = false; }
+    if (!mono) continue;
+    on[n * P + k] = 1;
+    shift[n * P + k] = v(n - 1) > v(n + 1) ? (v(n + 1) - v(n - 1)) / (v(n) - v(n + 1)) / 2 : (v(n + 1) - v(n - 1)) / (v(n) - v(n - 1)) / 2;
   }
-  const [onB, onS] = binarize(reg.onset, 0.3, 2), [offB, offS] = binarize(reg.offset, 0.3, 4);
+  return [on, shift];
+}
+// ByteDance's sustain pedal model (the same project and licence as its note model): when the pedal is down,
+// [[down, up], ...] in seconds. As the original: the pedal goes down where its frame curve rises past 0.5, and up
+// at the next pedal-offset peak, or 0.1 s after the frame curve has dropped
+async function kongPedal(audio) {
+  const s = await session("bytedance_pedal", "ByteDance pedal model");
+  const r = await kongRun(s, audio, ["pframe", "poffset"], 1, [0.7, 0.3]);
+  s.release();
+  const fr = r.pframe, [offB, offS] = binarize(r.poffset, 1, 0.2, 4), out = [];
+  let bgn = null, gone = null, offAt = null;
+  for (let i = 1; i < fr.length; i++) {
+    if (fr[i] >= 0.5 && fr[i] > fr[i - 1] && !bgn) bgn = i;
+    if (bgn && i > bgn) {
+      if (fr[i] <= 0.5 && !gone) gone = i;
+      if (offB[i] && !offAt) offAt = i;
+      if (offAt) { out.push([bgn / 100, (offAt + offS[offAt]) / 100]); bgn = gone = offAt = null; }
+      if (gone && i - gone >= 10) { out.push([bgn / 100, (gone + offS[gone]) / 100]); bgn = gone = offAt = null; }
+    }
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+async function bytedance(audio, name = "bytedance", label = "ByteDance model", pedal = true) {
+  const s = await session(name, label);
+  const P = 88, reg = await kongRun(s, audio, ["onset", "offset", "frame", "velocity"], P, pedal ? [0, 0.7] : [0, 1]);
+  s.release();
+  const T = reg.frame.length / P;
+  const [onB, onS] = binarize(reg.onset, P, 0.3, 2), [offB, offS] = binarize(reg.offset, P, 0.3, 4);
   const notes = [];
   for (let k = 0; k < P; k++) {
     let bgn = null, gone = null, offAt = null;
@@ -138,7 +164,8 @@ async function bytedance(audio, name = "bytedance", label = "ByteDance model") {
       }
     }
   }
-  return notes;
+  if (!pedal) return notes;
+  return { notes, pedal: await kongPedal(audio) };
 }
 
 // ---------- Transkun: 16-second pieces every 8 seconds; a semi-Markov model picks each key's notes ----------

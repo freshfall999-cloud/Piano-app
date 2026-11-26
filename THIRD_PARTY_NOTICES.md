@@ -31,7 +31,7 @@ there: they are never uploaded or published.
 | Magenta.js and the Onsets and Frames checkpoint | `vendor/magenta/` | Google LLC | Apache 2.0 (`vendor/magenta/LICENSE`) |
 | ONNX Runtime Web 1.22.0 | `vendor/ort/` | Microsoft Corporation | MIT (`vendor/ort/LICENSE`) |
 | High-resolution piano transcription: note-processing code ported to JavaScript in `onnx-worker.js` | — | Qiuqiang Kong et al. (ByteDance), github.com/bytedance/piano_transcription | Apache 2.0 |
-| ByteDance note-model weights, converted to ONNX with 16-bit weights | `vendor/models/bytedance.*` | Qiuqiang Kong et al., zenodo.org/records/4034264 | CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) |
+| ByteDance note-model and pedal-model weights, converted to ONNX with 16-bit weights (the pedal model's post-processing ported to JavaScript in `onnx-worker.js`) | `vendor/models/bytedance.*`, `vendor/models/bytedance_pedal.*` | Qiuqiang Kong et al., zenodo.org/records/4034264 | CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) |
 | The same network re-trained for robustness, converted to ONNX with 16-bit weights | `vendor/models/qmul.*` | Drew Edwards, Simon Dixon, Emmanouil Benetos, Akira Maezawa, Yuta Kusaka (Queen Mary University of London, Yamaha), zenodo.org/records/10610212 | CC BY 4.0 |
 | Transkun 2.0 code (decoding ported to JavaScript in `onnx-worker.js`) and weights (V2 as shipped, and V2 Aug), converted to ONNX with 16-bit weights | `vendor/models/transkun_*`, `vendor/models/tkaug_*` | Yujia Yan, Zhiyao Duan | MIT (`vendor/models/LICENSE-transkun`) |
 | hFT-Transformer code (note extraction ported to JavaScript in `onnx-worker.js`) | — | Sony Group Corporation, github.com/sony/hFT-Transformer | MIT (`vendor/models/LICENSE-sony-code`) |

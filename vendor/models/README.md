@@ -2,7 +2,8 @@ Converted piano transcription models (PyTorch → ONNX, weights stored as 16-bit
 
 - `bytedance.*` — "High-resolution Piano Transcription with Pedals by Regressing Onsets and Offsets Times",
   Qiuqiang Kong et al. (ByteDance), 2020. Code: Apache License 2.0 (github.com/bytedance/piano_transcription,
-  piano_transcription_inference). Weights: zenodo.org/records/4034264, CC BY 4.0. Only the note model is included.
+  piano_transcription_inference). Weights: zenodo.org/records/4034264, CC BY 4.0. The note model is `bytedance.*`; the sustain-pedal model from the same
+  checkpoint is `bytedance_pedal.*` (used after ByteDance, Queen Mary / Yamaha and Demucs + ByteDance).
 - `transkun_*` — Transkun 2.0 by Yujia Yan and Zhiyao Duan (MIT License, see LICENSE-transkun). The network is split
   into the feature context (`transkun_ctx`), the interval scorer (`transkun_score`) and the velocity/offset heads
   (`transkun_attr`); `transkun_windows.f32` and `transkun_mel.json` are its analysis windows and mel filter bank.
