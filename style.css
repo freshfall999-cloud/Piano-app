@@ -120,6 +120,7 @@ input[type=checkbox] { width: 18px; height: 18px; }
 .traincard:hover, .traincard:active { background: #244232; }
 header:not(.train) .trainonly, header.train .songonly, header.train .drillonly, header.train #hud { display: none; }
 .sensrow { margin: 0 0 12px; }
+#micDevice { max-width: 100%; }   /* long input names stay on screen */
 .drillcard:hover, .drillcard:active { background: #234064; }
 .drillcard .t { font-size: 18px; font-weight: 700; color: #fff; }
 .drillcard .by { color: #b9c6dc; font-size: 13px; }
@@ -216,3 +217,7 @@ html.locked body > :not(#gate) { visibility: hidden; }
 .pfield { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #a9b4ca; }
 .pfield input { width: 190px; max-width: 42vw; padding: 7px 9px; border-radius: 8px; border: 1px solid #3a4258; background: #121522; color: #e8ecf6; font-size: 15px; }
 .fx3d { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* a digital piano plugged in */
+.midiconnect { margin: 0 0 12px; }
+#pianoBox .midisound:not([hidden]) { display: block; }
+#midi:not([hidden]) { padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(95,211,138,.5); background: rgba(95,211,138,.12); color: #bff3cf; font-size: 14px; font-weight: 600; white-space: nowrap; }

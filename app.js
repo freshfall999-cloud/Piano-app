@@ -24,6 +24,7 @@
   };
 
   const HINT = ui.hint.textContent;
+  const appleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   // ---------- Audio ----------
   let ac = null, master = null;
@@ -559,9 +560,9 @@
     return first ? song.notes.filter(n => n.state === "pending" && isUser(n) && n.start - first.start < 1e-6) : [];
   }
 
-  function press(midi, vel) {
+  function press(midi, vel, silent = false) {
     if (down.has(midi) || train) return;
-    down.add(midi); noteOn(midi, vel);
+    down.add(midi); if (!silent) noteOn(midi, vel);
     if (drill) { drillAnswer(midi); return; }
     if (state !== "running" || mode() === "listen") return;
     if (mode() === "practice") {
@@ -773,6 +774,7 @@
   buildTemplates();
   const saveCalib = () => { try { localStorage.setItem("keyfall:calib", JSON.stringify(calib)); } catch (e) {} };
   const sens = () => SENS[ui.sens.value] || SENS.normal;
+  const talkOn = () => ui.ignoreTalk.checked && !mic.line;   // a cable from the piano carries no talking
   const noiseAt = b => {                               // a level the room's noise rarely exceeds in this band
     const live = mic.live[b] + 2 * Math.sqrt(mic.spread[b]);
     return calib ? Math.max(calib.noise[b], live) : live;
@@ -797,10 +799,27 @@
     // ask for the raw microphone: voice processing (echo cancellation, noise suppression, auto gain) treats
     // a held piano note as noise and turns soft playing down
     const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    const open = async id => {                         // id "": the default input
+      const dev = id ? { deviceId: { exact: id } } : {};
+      try { return await navigator.mediaDevices.getUserMedia({ audio: { ...Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { exact: v }])), ...dev } }); }
+      catch (e) { if (e && e.name === "NotAllowedError") throw e; return await navigator.mediaDevices.getUserMedia({ audio: { ...raw, ...dev } }); }
+    };
+    // the input picked in settings (a digital piano's USB cable, an audio interface), found again by its name
+    const want = micWanted();
+    // Safari on iPad sometimes lists a USB input but still records the built-in microphone; asking for a
+    // play-and-record audio session first helps it switch (WebKit bug 211192)
+    if (want && navigator.audioSession) try { navigator.audioSession.type = "play-and-record"; } catch (e) {}
+    let stream = null, id = want ? await findMic(want) : "";
     try {
-      try { mic.stream = await navigator.mediaDevices.getUserMedia({ audio: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { exact: v }])) }); }
-      catch (e) { if (e && e.name === "NotAllowedError") throw e; mic.stream = await navigator.mediaDevices.getUserMedia({ audio: raw }); }
+      if (id === null) { stream = await open(""); id = await findMic(want) || ""; }   // names stay hidden until the microphone is allowed
+      if (id) {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        try { stream = await open(id); } catch (e) { if (e && e.name === "NotAllowedError") throw e; stream = null; id = ""; }
+      }
+      if (!stream) stream = await open("");
     } catch (e) { ui.micText.textContent = "🎤 Mic blocked"; return; }
+    mic.stream = stream;
+    mic.line = !!id && !BUILT_IN.test(want);           // a cable from the piano: clean sound, nobody talking into it
     const track = mic.stream.getAudioTracks()[0], st = track && track.getSettings ? track.getSettings() : {};
     mic.filtered = st.echoCancellation === true || st.noiseSuppression === true || st.autoGainControl === true;
     mic.analyser = ac.createAnalyser();
@@ -823,6 +842,41 @@
     }
     mic.hist = []; mic.live.fill(-200); mic.spread.fill(9); mic.over.fill(0); mic.roomDb = null; mic.startAt = performance.now();
     mic.on = true; ui.micText.textContent = "🎤 Listen: on"; ui.mic.classList.add("primary");
+    fillMics();                                        // input names can be shown now
+  }
+
+  // ---------- Which input "🎤 Listen" uses (remembered by name: the device's id can change on an iPad) ----------
+  const micSel = $("micDevice"), micNote = $("micDeviceNote"), micHelp = micNote ? micNote.textContent : "";
+  const BUILT_IN = /built-?in|iphone|ipad|default|internal|mic|airpods|headset|bluetooth|webcam|camera/i;
+  const micWanted = () => { try { return localStorage.getItem("keyfall:micDevice") || ""; } catch (e) { return ""; } };
+  async function micInputs() {
+    try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput" && d.deviceId !== "default" && d.deviceId !== "communications"); }
+    catch (e) { return []; }
+  }
+  // its id, "" if it isn't connected, or null if names are still hidden
+  async function findMic(label) {
+    const list = await micInputs();
+    return list.some(d => d.label) ? (list.find(d => d.label === label) || {}).deviceId || "" : null;
+  }
+  async function fillMics() {
+    if (!micSel) return;
+    const want = micWanted(), list = await micInputs(), named = list.some(d => d.label);
+    const opts = [new Option("Built-in microphone (default)", "")];
+    if (named) list.forEach(d => d.label && opts.push(new Option(d.label, d.label)));
+    const missing = !!want && named && !list.some(d => d.label === want);
+    if (want && !opts.some(o => o.value === want)) opts.push(new Option(want + (missing ? " (not connected)" : ""), want));
+    if (!named) { const o = new Option("Other inputs appear after you turn on 🎤 Listen once", "-"); o.disabled = true; opts.push(o); }
+    micSel.replaceChildren(...opts);
+    micSel.value = want;
+    micNote.textContent = (missing ? `“${want}” isn't connected, using the built-in microphone. ` : "") + micHelp;
+  }
+  if (micSel) {
+    micSel.onchange = async () => {
+      try { localStorage.setItem("keyfall:micDevice", micSel.value); } catch (e) {}
+      if (mic.on) { await toggleMic(); await toggleMic(); } else fillMics();   // switch inputs while listening
+    };
+    fillMics();
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", fillMics);
   }
 
   function detectPitch(x, sr) {
@@ -1086,7 +1140,7 @@
             if (window.__aiLog) window.__aiLog.push({ m, conf: +KeyfallML.onsetConf[m].toFixed(2), dt: Math.round(mic.onsetAt[m] - at), pN: mic.pN[m], range: Math.round(mic.pMax[m] - mic.pMin[m]), drop2: +mic.drop2[m].toFixed(1), sub: mic.sub[m], fund: mic.fund[m], sus: +KeyfallML.sustain[m].toFixed(2) });
             const same = Math.abs(mic.onsetAt[m] - at) < 250;
             if (same) {
-              if (ui.ignoreTalk.checked && ((mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 60) || mic.drop2[m] > 15)) continue;
+              if (talkOn() && ((mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 60) || mic.drop2[m] > 15)) continue;
               if (mic.sub[m] >= 3 && mic.fund[m] * 3 < mic.sub[m]) continue;
             }
             // struck piano keys get a sure verdict (0.9 or more); a less sure one needs the signal checks to have seen
@@ -1105,7 +1159,7 @@
         const take = (n, from) => {
           const m = n.midi;
           mic.usedAt[m] = from;
-          const talkFilter = ui.ignoreTalk.checked && from === mic.onsetAt[m];
+          const talkFilter = talkOn() && from === mic.onsetAt[m];
           if (talkFilter && mic.pN[m] >= 3 && mic.pMax[m] - mic.pMin[m] > 60) return;   // pitch slid: a voice, not a piano
           // its sound died away at once: speech, not a struck string
           if (talkFilter && mic.drop2[m] > 15) return;
@@ -1116,7 +1170,7 @@
         for (const n of targets) {
           const m = n.midi;
           const age = now - mic.onsetAt[m];
-          const wait = ui.ignoreTalk.checked ? 170 : 120;
+          const wait = talkOn() ? 170 : 120;
           if (mic.onsetAt[m] > mic.usedAt[m] && age >= wait && age <= keep + wait) take(n, mic.onsetAt[m]);
         }
         // the rest of a chord that was just heard: weaker evidence is enough for its other notes
@@ -2223,23 +2277,96 @@
   canvas.addEventListener("pointerup", pointerUp);
   canvas.addEventListener("pointercancel", pointerUp);
 
-  if (navigator.requestMIDIAccess) {
-    navigator.requestMIDIAccess().then(access => {
-      const hook = () => {
-        let n = 0;
-        access.inputs.forEach(inp => {
-          n++;
-          inp.onmidimessage = ({ data }) => {
-            const cmd = data[0] & 0xf0;
-            if (cmd === 0x90 && data[2] > 0) press(data[1], 0.3 + 0.7 * data[2] / 127);
-            else if (cmd === 0x80 || cmd === 0x90) release(data[1]);
-          };
-        });
-        ui.midi.textContent = n ? "🎹 MIDI" : ""; ui.midi.hidden = !n; ui.midi.className = "stat midi";
-      };
-      hook(); access.onstatechange = hook;
-    }, () => {});
+  // ---------- A digital piano (or any MIDI keyboard) plugged in by USB cable or Bluetooth ----------
+  // Its keys count exactly like taps on the screen, but straight from the piano: no microphone guessing, every
+  // key and how hard it was struck. The piano makes its own sound, so the app stays quiet unless asked
+  // (a keyboard without speakers). Its sustain pedal holds the app's sound too.
+  // Web MIDI: Chrome, Edge, Firefox and Android have it; Safari (iPad, iPhone, Mac) doesn't.
+  const midiIn = { access: null, names: [], pedal: false, held: new Set(), micNoted: false };
+  const midiSound = () => $("midiSound").checked;
+  function midiStatus() {
+    const st = $("midiState"), btn = $("midiConnect"), help = $("midiHelp");
+    if (!navigator.requestMIDIAccess) {
+      st.textContent = appleMobile || /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent)
+        ? "Safari can't receive the keys from a digital piano: Apple hasn't added that (“Web MIDI”) to Safari, on iPad or anywhere."
+        : "This browser can't receive the keys from a digital piano (it has no “Web MIDI”).";
+      btn.hidden = true; $("midiSound").parentNode.hidden = true;
+      help.innerHTML = MIDI_HELP_NONE;
+    } else if (!midiIn.access) {
+      st.textContent = "Plug your digital piano in (or pair it by Bluetooth), turn it on, then tap Connect.";
+      btn.hidden = false; help.innerHTML = MIDI_HELP;
+    } else {
+      st.textContent = midiIn.names.length ? "✅ Connected: " + midiIn.names.join(", ") + ". Just play: every key counts, no microphone needed."
+        : "No digital piano found yet. Check the cable and that the piano is on: it connects by itself as soon as it's found.";
+      btn.hidden = !!midiIn.names.length; btn.textContent = "Look again";
+      help.innerHTML = midiIn.names.length ? "" : MIDI_HELP;
+    }
+    ui.midi.textContent = midiIn.names.length ? "🎹 Piano" : ""; ui.midi.hidden = !midiIn.names.length; ui.midi.className = "stat midi";
+    ui.midi.title = midiIn.names.join(", ");
   }
+  const CABLE = "Connect the piano's <b>USB</b> port (often labelled “USB to Host”) with a USB cable: on an iPad with a USB-C port through Apple's " +
+    "USB-C to USB Adapter, on one with a Lightning port through Apple's Lightning to USB 3 Camera Adapter. Some keyboards need their own power supply.";
+  const MIDI_HELP = CABLE + " A Bluetooth MIDI piano can connect without a cable.";
+  const MIDI_HELP_NONE = "Two ways round it:<br>• <b>Best:</b> get the free <b>MIDIWeb Browser</b> app (by 5of12) from the App Store, open this app's address in it, " +
+    "and plug the piano in. That browser passes the piano's keys to web pages, by cable or Bluetooth. " + CABLE + "<br>• Or let the app <b>hear</b> the piano " +
+    "through the cable: some digital pianos (for example Roland FP-30X, Yamaha P-225) also send their sound over USB. Plug it in, pick it under " +
+    "“🎤 Listen through” above if it's listed, and tap 🎤 Listen. Safari doesn't always use the cable even when it lists it: if notes are missed " +
+    "when the room is noisy, it is probably still using the iPad's microphone.";
+  function midiMessage({ data }) {
+    const cmd = data[0] & 0xf0, a = data[1], b = data[2];
+    if (cmd === 0x90 && b > 0) {
+      if (mic.on && !midiIn.micNoted) {                 // the piano is plugged in: the microphone would count every note twice
+        midiIn.micNoted = true; toggleMic();
+        $("midiState").textContent = "✅ Your digital piano is connected, so 🎤 Listen was turned off (it isn't needed).";
+      }
+      midiIn.held.delete(a);
+      release(a);
+      press(a, 0.3 + 0.7 * b / 127, !midiSound());
+    } else if (cmd === 0x80 || cmd === 0x90) {
+      if (midiIn.pedal && midiSound()) { midiIn.held.add(a); down.delete(a); return; }   // the key is up, the pedal keeps it ringing
+      release(a);
+    } else if (cmd === 0xb0 && a === 64) {              // sustain pedal
+      midiIn.pedal = b >= 64;
+      if (!midiIn.pedal) { midiIn.held.forEach(m => { if (!down.has(m) && !autoDown.has(m)) noteOff(m); }); midiIn.held.clear(); }
+    } else if (cmd === 0xb0 && (a === 123 || a === 120)) {   // all notes off
+      [...down].forEach(release); midiIn.held.clear();
+    }
+  }
+  function hookMidi() {
+    const names = [];
+    midiIn.access.inputs.forEach(inp => {
+      inp.onmidimessage = midiMessage;
+      if (inp.state !== "disconnected") names.push((inp.name || "MIDI keyboard").replace(/\s+/g, " ").trim());
+    });
+    const was = midiIn.names.length;
+    midiIn.names = [...new Set(names)];
+    if (midiIn.names.length && !was) midiIn.micNoted = false;
+    midiStatus();
+  }
+  async function connectMidi(auto) {
+    if (!navigator.requestMIDIAccess || midiIn.access) { midiStatus(); return; }
+    try {
+      midiIn.access = await navigator.requestMIDIAccess({ sysex: false });
+      midiIn.access.onstatechange = hookMidi;
+      hookMidi();
+      try { localStorage.setItem("keyfall:midi", "1"); } catch (e) {}
+    } catch (e) {
+      console.warn("MIDI:", e);
+      if (!auto) $("midiState").textContent = "The browser didn't allow it (" + ((e && (e.name || e.message)) || "no reason given") + "). Allow MIDI devices for this site in the browser's settings, then tap Connect again.";
+    }
+  }
+  $("midiConnect").onclick = () => { audio(); connectMidi(false); };
+  try { $("midiSound").checked = localStorage.getItem("keyfall:midiSound") === "1"; } catch (e) {}
+  $("midiSound").onchange = () => { try { localStorage.setItem("keyfall:midiSound", $("midiSound").checked ? "1" : "0"); } catch (e) {} };
+  midiStatus();
+  // connect by itself when that won't pop up a question: allowed before, or a browser app that adds MIDI without asking
+  (async () => {
+    if (!navigator.requestMIDIAccess) return;
+    let ok = false;
+    try { ok = localStorage.getItem("keyfall:midi") === "1"; } catch (e) {}
+    try { if ((await navigator.permissions.query({ name: "midi" })).state === "granted") ok = true; } catch (e) { ok = true; }
+    if (ok) connectMidi(true);
+  })();
 
   // ---------- UI wiring ----------
   function refreshOptions() { ui.song.length = 0; SONGS.forEach((s, i) => ui.song.add(new Option(s.title, i))); }
@@ -2339,7 +2466,6 @@
   const MODEL_NAMES = { best: "Google Onsets and Frames", transkun: "Transkun", tkaug: "Transkun V2 Aug", qmul: "Queen Mary / Yamaha",
     bytedance: "ByteDance", sony: "Sony hFT-Transformer", standard: "Spotify Basic Pitch", arrange: "Songs → piano version (Basic Pitch)",
     demucs: "Demucs + ByteDance", ymt3: "YourMT3+", muscriptor: "MuScriptor", song: "Spotify Basic Pitch (songs)" };
-  const appleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   async function transcribe(file, progress) {
     progress("Reading the recording…");
     usedModel = MODEL_NAMES[ui.finder.value] || "";
