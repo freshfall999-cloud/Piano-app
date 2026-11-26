@@ -28,7 +28,7 @@ async function fetchBuf(path, label) {
     parts.push(value); got += value.length;
     if (label && performance.now() - last > 300) { last = performance.now(); say("download", { label, f: size && !packed ? Math.min(1, got / size) : null, mb: got / 1e6 }); }
   }
-  if (parts.length === 1) return parts[0];
+  if (parts.length === 1) { const v = parts[0]; return v.byteOffset === 0 && v.byteLength === v.buffer.byteLength ? v : v.slice(); }   // (a whole buffer of its own)
   const out = new Uint8Array(got); let at = 0;
   for (const p of parts) { out.set(p, at); at += p.length; }
   return out;
@@ -58,10 +58,23 @@ async function session(name, label) {
   }
   let onGpu = providers[0] === "webgpu", s;
   try { s = await create(onGpu ? providers : ["wasm"]); } catch (e) { if (!onGpu) throw e; onGpu = false; s = await create(["wasm"]); }
+  // on the graphics chip: give up on it if it errors, hangs (some iPads), or hands back broken numbers
+  const sane = out => Object.values(out).every(t => { const d = t.data; if (!d || !d.length || typeof d[0] !== "number") return true; for (let i = 0; i < d.length; i += Math.max(1, d.length >> 12)) if (!Number.isFinite(d[i])) return false; return true; });
+  const toCpu = async why => {
+    console.warn(name + ": graphics chip " + why + ", using the processor");
+    onGpu = false; providers = ["wasm"];
+    try { s.release && s.release(); } catch (e) {}
+    s = await create(["wasm"]);
+  };
   return {
     async run(feeds) {
-      try { return await s.run(feeds); }
-      catch (e) { if (!onGpu) throw e; console.warn(name + ": graphics chip failed, using the processor:", e); onGpu = false; providers = ["wasm"]; s = await create(["wasm"]); return await s.run(feeds); }
+      if (!onGpu) return await s.run(feeds);
+      let out;
+      try {
+        out = await Promise.race([s.run(feeds), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 120000))]);
+      } catch (e) { await toCpu("failed (" + (e && e.message || e) + ")"); return await s.run(feeds); }
+      if (!sane(out)) { await toCpu("gave broken numbers"); return await s.run(feeds); }
+      return out;
     },
   };
 }
@@ -154,7 +167,7 @@ function cbMean(logit) {                                   // mean of a continuo
 }
 async function transkun(audio, name = "transkun") {          // "transkun" (V2 as shipped) or "tkaug" (V2 Aug)
   const ctxS = await session(name + "_ctx", "Transkun model"), scoreS = await session(name + "_score"), attrS = await session(name + "_attr");
-  const wins = new Float32Array((await fetchBuf("models/" + name + "_windows.f32")).buffer.slice(0));
+  const wins = new Float32Array((await fetchBuf("models/" + name + "_windows.f32")).slice().buffer);   // (an exact copy: Safari can hand over a piece of a bigger buffer)
   const mel = JSON.parse(new TextDecoder().decode(await fetchBuf("models/transkun_mel.json"))).mel;
   fft = fft || makeFFT(WIN);
   const padBegin = 8, padN = Math.ceil(padBegin * FS);

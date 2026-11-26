@@ -61,7 +61,7 @@ async function fetchBuf(path, label) {
     parts.push(value); got += value.length;
     if (label && performance.now() - last > 300) { last = performance.now(); say("download", { label, f: size && !packed ? Math.min(1, got / size) : null, mb: got / 1e6 }); }
   }
-  if (parts.length === 1) return parts[0];
+  if (parts.length === 1) { const v = parts[0]; return v.byteOffset === 0 && v.byteLength === v.buffer.byteLength ? v : v.slice(); }   // (a whole buffer of its own)
   const out = new Uint8Array(got); let at = 0;
   for (const p of parts) { out.set(p, at); at += p.length; }
   return out;
@@ -82,8 +82,17 @@ async function session(name, label, processorOnly = false) {
   return {
     get backend() { return onGpu ? "webgpu" : "wasm"; },
     async run(feeds) {
-      try { return await s.run(feeds); }
-      catch (e) { if (!onGpu) throw e; console.warn(name + ": graphics chip failed, using the processor:", e); onGpu = false; s = await create(["wasm"]); return await s.run(feeds); }
+      if (!onGpu) return await s.run(feeds);
+      // on the graphics chip: give up on it if it errors, hangs (some iPads), or hands back broken numbers
+      const toCpu = async why => { console.warn(name + ": graphics chip " + why + ", using the processor"); onGpu = false; try { s.release && s.release(); } catch (e) {} s = await create(["wasm"]); return await s.run(feeds); };
+      let out;
+      try { out = await Promise.race([s.run(feeds), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 120000))]); }
+      catch (e) { return await toCpu("failed (" + (e && e.message || e) + ")"); }
+      for (const t of Object.values(out)) {
+        const d = t.data; if (!d || !d.length || typeof d[0] !== "number") continue;
+        for (let i = 0; i < d.length; i += Math.max(1, d.length >> 12)) if (!Number.isFinite(d[i])) return await toCpu("gave broken numbers");
+      }
+      return out;
     },
   };
 }
