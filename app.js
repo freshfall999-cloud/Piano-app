@@ -2,7 +2,7 @@
   "use strict";
   let LOW = 48, HIGH = 84;            // C3..C6
   const LOOKAHEAD = 2.6;                // seconds of music visible above the hit line
-  const HIT_WINDOW = 0.22, PERFECT = 0.08;
+  let HIT_WINDOW = 0.22, PERFECT = 0.08;   // (Extra extra hard: 0.13 and 0.05)
   const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const isBlack = m => [1, 3, 6, 8, 10].includes(m % 12);
 
@@ -298,6 +298,7 @@
   //  extra: fuller — melody in octaves, bass in octaves (or a bass line added to one-hand songs)
   function arrange(notes, level, beat) {
     if (level === "hard" || !notes.length) return notes;
+    if (level === "insane") return insane(arrange(notes, "extra", beat), beat);
     const groups = [];
     for (const n of notes) { const g = groups[groups.length - 1]; if (g && n.start - g[0].start < 0.05) g.push(n); else groups.push([n]); }
     const top = l => l.reduce((a, b) => b.midi > a.midi ? b : a), low = l => l.reduce((a, b) => b.midi < a.midi ? b : a);
@@ -333,6 +334,52 @@
       if (r.length && (level === "medium" || g[0].start - last >= 0.12)) { out.push({ ...top(r) }); last = g[0].start; }
       if (level === "medium" && l.length) out.push({ ...low(l) });
     }
+    return out;
+  }
+
+  // Extra extra hard: the Extra hard version, and then
+  //  · the right hand plays full chords: under each longer melody note a chord tone fills the octave
+  //    (taken from what the left hand is holding, or a fourth below the melody)
+  //  · the left hand never rests: between its notes it runs in quick notes (half a beat each) over its
+  //    bass note: low, fifth, octave, fifth, … (a pianist's broken-chord accompaniment)
+  //  (and the timing to hit a note is much stricter: set when the song starts)
+  function insane(notes, beat) {
+    const out = notes.slice(), have = new Set(notes.map(n => n.midi + "@" + n.start.toFixed(3)));
+    const add = (ref, midi, hand, start, dur) => {
+      const k = midi + "@" + start.toFixed(3);
+      if (midi < 21 || midi > 108 || have.has(k)) return;
+      have.add(k); out.push({ ...ref, midi, hand, start, dur, amp: (ref.amp ?? 1) * 0.8, state: "pending", played: false });
+    };
+    const end = Math.max(...notes.map(n => n.start + n.dur));
+    const groups = [];
+    for (const n of notes) { const g = groups[groups.length - 1]; if (g && n.start - g[0].start < 0.05) g.push(n); else groups.push([n]); }
+    // right hand: octave chords
+    for (const g of groups) {
+      const r = g.filter(n => n.hand === "right");
+      if (!r.length || r.length >= 4) continue;
+      const mel = r.reduce((a, b) => b.midi > a.midi ? b : a);
+      if (mel.dur < beat * 0.45) continue;                       // fast runs stay in octaves
+      const t = mel.start;
+      const pcs = new Set(notes.filter(n => n.hand === "left" && n.start <= t + 0.03 && n.start + n.dur > t).map(n => n.midi % 12));
+      pcs.delete(mel.midi % 12);
+      let pick = null;
+      for (let m = mel.midi - 3; m >= mel.midi - 9; m--) if (pcs.has(m % 12) && !r.some(n => n.midi === m)) { pick = m; break; }
+      if (pick === null) pick = mel.midi - 5;
+      if (r.some(n => n.midi === pick)) continue;
+      add(mel, pick, "right", t, mel.dur);
+    }
+    // left hand: broken-chord eighths over each bass note until the next left-hand note
+    const lg = groups.map(g => g.filter(n => n.hand === "left")).filter(g => g.length);
+    const step = beat / 2;
+    lg.forEach((g, i) => {
+      const bass = g.reduce((a, b) => b.midi < a.midi ? b : a);
+      let root = bass.midi;
+      while (root < 36) root += 12;
+      const next = i + 1 < lg.length ? lg[i + 1][0].start : end;
+      const stop = Math.min(next, bass.start + beat * 4, end) - 0.06;
+      const pattern = [0, 7, 12, 7];
+      for (let k = 1, t = bass.start + step; t < stop; k++, t += step) add(bass, root + pattern[k % 4], "left", t, step * 0.95);
+    });
     return out;
   }
 
@@ -424,6 +471,7 @@
 
   function reset() {
     song = loadSong(SONGS[ui.song.value], ui.level.value);
+    HIT_WINDOW = ui.level.value === "insane" ? 0.13 : 0.22; PERFECT = ui.level.value === "insane" ? 0.05 : 0.08;
     sheet = null;
     const hasL = song.notes.some(n => n.hand === "left"), hasR = song.notes.some(n => n.hand === "right");
     for (const o of ui.hand.options) o.disabled = (o.value !== "right" && !hasL) || (o.value !== "left" && !hasR);
@@ -1870,7 +1918,7 @@
         if (pi === 0) {
           ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
           ctx.font = `700 64px Georgia, "Times New Roman", serif`; ctx.fillText(meta.title || def.title, PAGE_W / 2, MARGIN + 70, PAGE_W - 2 * MARGIN);
-          const level = { easy: "Easy", medium: "Medium", hard: "", extra: "Extra hard" }[ui.level.value] || "";
+          const level = { easy: "Easy", medium: "Medium", hard: "", extra: "Extra hard", insane: "Extra extra hard" }[ui.level.value] || "";
           ctx.font = `italic 30px Georgia, "Times New Roman", serif`;
           ctx.fillText([level && level + " version", "for piano"].filter(Boolean).join(" "), PAGE_W / 2, MARGIN + 120);
           ctx.textAlign = "right"; ctx.font = `30px Georgia, "Times New Roman", serif`;
@@ -1934,7 +1982,7 @@
       box.textContent = "";
       printed = printPages($("printNames").checked, meta());
       for (const cv of printed) { const img = new Image(); img.src = cv.toDataURL("image/png"); img.alt = "Sheet music page"; box.append(img); }
-      $("printInfo").textContent = `${printed.length} page${printed.length > 1 ? "s" : ""} · ${{ easy: "Easy", medium: "Medium", hard: "Hard", extra: "Extra hard" }[ui.level.value]} version (change it on the start card)`;
+      $("printInfo").textContent = `${printed.length} page${printed.length > 1 ? "s" : ""} · ${{ easy: "Easy", medium: "Medium", hard: "Hard", extra: "Extra hard", insane: "Extra extra hard" }[ui.level.value]} version (change it on the start card)`;
     };
     $("printNames").onchange = render;
     $("printClose").onclick = () => { view.hidden = true; box.textContent = ""; printed = null; };
@@ -2577,7 +2625,7 @@
       SONGS.push({ title, by: got.beat ? "Piano arrangement" : isMidi ? "Imported" : "From a recording", level: "My songs", notes,
         ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}), ...(got.beat ? { beat: got.beat, bar0: got.bar0 } : {}) });
       saveImported(); refreshOptions();
-      msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.` +
+      msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard, Extra hard or Extra extra hard when you open it.` +
         (lastFail ? ` (The chosen note finder failed — “${lastFail.slice(0, 120)}” — so the standard one was used.)` : "");
       sfx("trained");
       showHome();
