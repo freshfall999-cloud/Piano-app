@@ -131,6 +131,7 @@
       if (!bars.length) bars = lb;
     }
     notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
+    if (def.notes && !def.beat) notes = tidyRecording(notes);
     notes = arrange(notes, level, beat);
     notes.sort((a, b) => a.start - b.start || a.midi - b.midi);
     // if both hands strike the same key at the same moment, keep one note
@@ -183,6 +184,35 @@
         if (j < hs.length) n.dur = Math.max(n.dur, Math.min(hs[j].start - n.start, beat * 2));
       }
     }
+  }
+  // ---------- A note finder's raw notes, made readable ----------
+  // On a busy recording (an orchestra, a band) a piano note finder hears every instrument as piano: dozens of keys at
+  // once, faint echoes, the same key struck twice in a blink. Keep what a pianist would play: per hand at most four
+  // keys at a time within an octave (the melody on top of the right hand, the bass at the bottom of the left, then
+  // the loudest), drop faint ghost notes and merge quick repeats.
+  function tidyRecording(notes) {
+    if (notes.length < 2) return notes;
+    const amps = notes.map(n => n.amp ?? 1).sort((a, b) => a - b), loud = amps[Math.floor(amps.length * 0.9)] || 1;
+    const out = [], lastOf = new Map();
+    for (let i = 0; i < notes.length;) {
+      let j = i; while (j < notes.length && notes[j].start - notes[i].start < 0.05) j++;
+      const g = notes.slice(i, j); i = j;
+      const top = Math.max(...g.map(n => n.amp ?? 1));
+      const keepable = g.filter(n => g.length === 1 || ((n.amp ?? 1) >= top * 0.22 && (n.amp ?? 1) >= loud * 0.08));
+      for (const hand of ["right", "left"]) {
+        const hs = keepable.filter(n => n.hand === hand).sort((a, b) => a.midi - b.midi);
+        if (!hs.length) continue;
+        const anchor = hand === "right" ? hs[hs.length - 1] : hs[0];
+        const rest = hs.filter(n => n !== anchor && Math.abs(n.midi - anchor.midi) <= 12 && n.midi !== anchor.midi)
+          .sort((a, b) => (b.amp ?? 1) - (a.amp ?? 1)).slice(0, 3);
+        for (const n of [anchor, ...rest]) {
+          const prev = lastOf.get(n.midi);
+          if (prev && n.start - prev.start < 0.09) { prev.dur = Math.max(prev.dur, n.start + n.dur - prev.start); continue; }   // a stutter
+          lastOf.set(n.midi, n); out.push(n);
+        }
+      }
+    }
+    return out.sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
   // ---------- Playable by real hands ----------
   // Every chord is split between the hands so neither stretches more than an octave or plays more than five keys.
@@ -284,7 +314,7 @@
         out.push(...g);
         const r = g.filter(n => n.hand === "right"), l = g.filter(n => n.hand === "left");
         if (r.length && r.length < 3) { const t = top(r); add(t, t.midi >= 67 ? t.midi - 12 : t.midi + 12, "right"); }   // melody in octaves
-        if (l.length) { const b = low(l); add(b, b.midi - 12, "left"); }
+        if (l.length && l.length < 3) { const b = low(l); if (b.midi - 12 >= 28) add(b, b.midi - 12, "left"); }
         else if (oneHand && r.length && g[0].start - lastBass >= beat * 2 - 0.02) {
           let m = top(r).midi - 24;
           while (m < 36) m += 12;
@@ -1304,7 +1334,21 @@
       if (!c) { c = { T, staff, items: [], all: [], start: n.start, endT: T + 1, pieces: [] }; byKey.set(k, c); chords[staff].push(c); }
       c.all.push(n); c.start = Math.min(c.start, n.start);
       c.endT = Math.max(c.endT, toT(n.start + n.dur));
-      if (!c.items.some(i => i.n.midi === n.midi)) c.items.push({ n, ...spell(n.midi), name: "" });
+      if (!c.items.some(i => i.n.midi === n.midi)) c.items.push({ n, ...spell(n.midi), ott: 0, name: "" });
+    }
+    // very low or very high stretches are written an octave nearer the staff under an 8vb / 8va bracket, instead of a
+    // ladder of ledger lines; a whole chord moves together, and short gaps between such chords join the same bracket
+    for (const [staff, dir] of [["b", -1], ["t", 1]]) {
+      const cs = chords[staff].slice().sort((x, y) => x.T - y.T);
+      const ext = c => dir < 0 ? Math.min(...c.items.map(i => i.n.midi)) : Math.max(...c.items.map(i => i.n.midi));
+      const far = c => dir < 0 ? ext(c) < 36 : ext(c) > 88;
+      const ok = c => dir < 0 ? Math.max(...c.items.map(i => i.n.midi)) + 12 <= 62 : Math.min(...c.items.map(i => i.n.midi)) - 12 >= 57;
+      cs.forEach(c => c.ott = far(c) && ok(c) ? dir : 0);
+      for (let i = 0; i < cs.length; i++) if (cs[i].ott) {
+        let j = i + 1; while (j < cs.length && !cs[j].ott && cs[j].T - cs[i].T <= 16) j++;
+        if (j < cs.length && cs[j].ott && cs[j].T - cs[i].T <= 16 && cs.slice(i + 1, j).every(ok)) for (let k = i + 1; k < j; k++) cs[k].ott = dir;
+      }
+      for (const c of cs) if (c.ott) c.items.forEach(it => { it.step -= dir * 7; it.ott = dir; });
     }
     for (const c of byKey.values()) {
       c.items.sort((a, b) => a.step - b.step);
@@ -1472,6 +1516,15 @@
       }
       s.t0 = s.bars[0].t0; s.t1 = s.bars[s.bars.length - 1].t1; s.end = x;
       s.anchors.push({ t: s.t1, x: x - sp * 0.9 });
+      // how far this line's notes reach above the treble staff and below the bass staff (in staff spaces)
+      let hiT = 38, loB = 18;
+      for (const b of s.bars) for (const c of b.cols) for (const g of c.groups) if (!g.rest) {
+        const its = g.chord.items;
+        if (g.staff === "t") hiT = Math.max(hiT, its[its.length - 1].step + (g.up ? 7 : 0) + (its.some(i => i.ott > 0) ? 4 : 0));
+        else loB = Math.min(loB, its[0].step - (g.up ? 0 : 7) - (its.some(i => i.ott < 0) ? 4 : 0));
+      }
+      s.above = Math.max(3.6, (hiT - 38) / 2 + 1.6);
+      s.below = Math.max(3.9, (18 - loB) / 2 + 1.6 + (song.pedal && song.pedal.length ? 2.6 : 0));
       const row = i % rows, slot = (h - 8) / rows;
       s.trebleTop = top + 4 + row * slot + (slot - 14 * sp) / 2 + sp * 0.4;
       s.trebleBottom = s.trebleTop + 4 * sp; s.bassTop = s.trebleBottom + 6 * sp; s.bassBottom = s.bassTop + 4 * sp;
@@ -1577,7 +1630,9 @@
       // sustain pedal: "Ped." where it goes down, a line while it's held, a tick where it lifts
       if (song.pedal && song.pedal.length) {
         let lowest = 18;                                   // below the lowest note of the line
-        for (const b of s.bars) for (const c of b.cols) for (const g of c.groups) if (!g.rest && g.staff === "b") lowest = Math.min(lowest, g.chord.items[0].step);
+        let ottLow = false;
+        for (const b of s.bars) for (const c of b.cols) for (const g of c.groups) if (!g.rest && g.staff === "b") { lowest = Math.min(lowest, g.chord.items[0].step - (g.up ? 0 : 7)); if (g.chord.items.some(i => i.ott < 0)) ottLow = true; }
+        if (ottLow) lowest -= 4;
         const py = Math.min(s.bassBottom + sp * (printing ? 4.4 : 3.8), Math.max(s.bassBottom + sp * 2.7, yOf("b", lowest) + sp * 1.9));
         ctx.strokeStyle = "rgba(38,42,54,.7)"; ctx.fillStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = Math.max(1, sp * 0.12);
         ctx.font = `italic 700 ${Math.round(sp * 1.05)}px Georgia, serif`; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
@@ -1755,6 +1810,36 @@
         }
         ctx.globalAlpha = 1;
       }
+      // 8va / 8vb: one dashed bracket over each stretch of notes written an octave nearer the staff
+      for (const [st, dir] of [["b", -1], ["t", 1]]) {
+        let run = null;
+        const flush = () => {
+          if (!run) return;
+          const y = run.y + dir * -1 * 0;                     // (already placed clear of the notes)
+          ctx.strokeStyle = ctx.fillStyle = INK; ctx.lineWidth = Math.max(1, sp * 0.1);
+          ctx.font = `italic 700 ${Math.round(sp * 1.2)}px Georgia, serif`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+          const label = dir < 0 ? "8vb" : "8va", tw = ctx.measureText(label).width;
+          ctx.fillText(label, run.x0 - sp * 0.8, y);
+          ctx.setLineDash([sp * 0.5, sp * 0.45]); ctx.beginPath(); ctx.moveTo(run.x0 - sp * 0.8 + tw + sp * 0.3, y); ctx.lineTo(run.x1 + sp * 0.9, y); ctx.stroke(); ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(run.x1 + sp * 0.9, y); ctx.lineTo(run.x1 + sp * 0.9, y - dir * sp * 0.9); ctx.stroke();
+          ctx.textBaseline = "alphabetic"; run = null;
+        };
+        for (const b of s.bars) for (const c of b.cols) {
+          const gs = c.groups.filter(g => !g.rest && g.staff === st);
+          if (!gs.length) continue;
+          const hit = gs.some(g => g.chord.items.some(i => i.ott === dir));
+          if (!hit) { flush(); continue; }
+          let y = dir < 0 ? -Infinity : Infinity;
+          for (const g of gs) {
+            const its = g.chord.items;
+            if (dir < 0) y = Math.max(y, yOf(st, its[0].step) + (g.up ? 0 : sp * 3.4) + sp * 1.5, s.bassBottom + sp * 1.6);
+            else y = Math.min(y, yOf(st, its[its.length - 1].step) - (g.up ? sp * 3.4 : 0) - sp * 1.5, s.trebleTop - sp * 1.6);
+          }
+          if (run) { run.x1 = c.x; run.y = dir < 0 ? Math.max(run.y, y) : Math.min(run.y, y); }
+          else run = { x0: c.x, x1: c.x, y };
+        }
+        flush();
+      }
     }
   }
 
@@ -1771,10 +1856,10 @@
       let page = -1, y = Infinity, list = [];
       const layout = [];
       S.systems.forEach((sys, i) => {
-        const bottom = PAGE_H - MARGIN - foot;
-        if (y + slot > bottom) { page++; y = MARGIN + (page === 0 ? head : 0); layout.push([]); }
-        sys.trebleTop = y + 3.6 * sp; sys.trebleBottom = sys.trebleTop + 4 * sp; sys.bassTop = sys.trebleBottom + 6 * sp; sys.bassBottom = sys.bassTop + 4 * sp;
-        layout[page].push(i); y += slot;
+        const bottom = PAGE_H - MARGIN - foot, need = Math.max(slot, (sys.above + 14 + sys.below + 1) * sp);   // room for its high and low notes
+        if (y + need > bottom) { page++; y = MARGIN + (page === 0 ? head : 0); layout.push([]); }
+        sys.trebleTop = y + Math.max(3.6, sys.above) * sp; sys.trebleBottom = sys.trebleTop + 4 * sp; sys.bassTop = sys.trebleBottom + 6 * sp; sys.bassBottom = sys.bassTop + 4 * sp;
+        layout[page].push(i); y += need;
       });
       printing = { labels };
       const bpm = Math.round(60 / (song.beat || 0.5));
