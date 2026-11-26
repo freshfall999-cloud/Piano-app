@@ -136,7 +136,14 @@ async function kongPedal(audio) {
       if (gone && i - gone >= 10) { out.push([bgn / 100, (gone + offS[gone]) / 100]); bgn = gone = offAt = null; }
     }
   }
-  return out.sort((a, b) => a[0] - b[0]);
+  // it hears many quick lifts: join presses less than 0.3 s apart (a quick pedal change, the sound keeps ringing)
+  // and drop any shorter than 0.2 s, so it pedals like a pianist (on a real recording: 261 presses → 53 of about 2 s)
+  const joined = [];
+  for (const [d, u] of out.sort((a, b) => a[0] - b[0])) {
+    const last = joined[joined.length - 1];
+    if (last && d - last[1] < 0.3) last[1] = Math.max(last[1], u); else joined.push([d, u]);
+  }
+  return joined.filter(([d, u]) => u - d >= 0.2);
 }
 async function bytedance(audio, name = "bytedance", label = "ByteDance model", pedal = true) {
   const s = await session(name, label);
