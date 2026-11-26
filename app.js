@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), fx3d: $("fx3d"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -434,11 +434,23 @@
   }
   let streakAt = 0;
   const particles = [], beams = [], wrongs = [];
+  // 3D hit effects (three.js), loaded only when switched on; the flat sparks are used otherwise
+  let fx = null, fxLoading = null;
+  function setFx(on) {
+    if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
+    if (fx || fxLoading) return;
+    fxLoading = import("./fx3d.js?v=1").then(m => {
+      fxLoading = null;
+      if (!ui.fx3d.checked) return;
+      fx = m.createFx(canvas); fx.resize(W, H);
+    }).catch(e => { fxLoading = null; console.warn("3D effects unavailable:", e); ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(not available on this device)"; });
+  }
   function burst(midi, color, big) {
     if (midi < LOW || midi > HIGH || !keys.length) return;
     const k = keyOf(midi), x = k.x + k.w / 2, now = performance.now();
     beams.push({ x, w: k.w, color, t: now });
     if (reduceMotion) return;
+    if (fx) { try { fx.burst(x, kbTop, color, big, k.w); return; } catch (e) { console.warn("3D effects off:", e); fx = null; } }
     const n = big ? 34 : 18;
     for (let i = 0; i < n; i++) {
       const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.9, v = 120 + Math.random() * (big ? 320 : 220);
@@ -1175,6 +1187,7 @@
     const sheetOn = song && !drill && !train && ui.view.value === "sheet";
     const kbH = sheetOn ? Math.max(80, Math.min(H * 0.19, 150)) : Math.max(90, Math.min(H * 0.26, 200));
     kbTop = H - kbH;
+    if (fx) fx.resize(W, H);
     let whites = 0;
     grad = null;
     for (let m = LOW; m <= HIGH; m++) if (!isBlack(m)) whites++;
@@ -2479,6 +2492,10 @@
   ui.start.onclick = () => { sfx("click"); toggle(); };
   try { if (localStorage.getItem("keyfall:sfx") === "0") ui.sfx.checked = false; } catch (e) {}
   ui.sfx.onchange = () => { try { localStorage.setItem("keyfall:sfx", ui.sfx.checked ? "1" : "0"); } catch (e) {} };
+  if (reduceMotion) { ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(off: your device asks for less motion)"; }
+  try { if (localStorage.getItem("keyfall:fx3d") === "0") ui.fx3d.checked = false; } catch (e) {}
+  ui.fx3d.onchange = () => { try { localStorage.setItem("keyfall:fx3d", ui.fx3d.checked ? "1" : "0"); } catch (e) {} setFx(ui.fx3d.checked); };
+  setTimeout(() => setFx(ui.fx3d.checked), 1200);
   ui.pause.onclick = toggle;
   try { if (localStorage.getItem("keyfall:ignoreTalk") === "0") ui.ignoreTalk.checked = false; } catch (e) {}
   try { const v = localStorage.getItem("keyfall:level"); if (v && ui.level.querySelector(`[value="${v}"]`)) ui.level.value = v; } catch (e) {}

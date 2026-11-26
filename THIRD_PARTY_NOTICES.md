@@ -17,6 +17,11 @@ there: they are never uploaded or published.
   Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/). Converted to MP3 and renamed; see
   `samples/CREDITS.md`.
 
+## Graphics
+
+- **three.js** r170 by the three.js authors — `vendor/three/three.module.min.js`, used for the 3D sparkles when you hit a
+  note (`fx3d.js`). Licence: MIT (`vendor/three/LICENSE`).
+
 ## Note-finding models and libraries
 
 | What | Where | By | Licence |
