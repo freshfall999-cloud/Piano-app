@@ -6,12 +6,20 @@ import * as THREE from "./vendor/three/three.module.min.js";
 const MAX = 1600;                                         // sparks alive at once
 
 export function createFx(host) {
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power", premultipliedAlpha: false });
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
   const canvas = renderer.domElement;
   canvas.className = "fx3d";
   canvas.setAttribute("aria-hidden", "true");
   host.after(canvas);
   renderer.setClearColor(0x000000, 0);
+  // iPads drop a page's 3D drawing when memory is short or the app was in the background: then say so
+  // (the next burst throws, and the app goes back to its flat sparks)
+  let lost = false;
+  canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); lost = true; });
+  // Light that adds up where sparks overlap, and also covers what's under it (so it shows on the white keys too):
+  // the colour is added (premultiplied, as the page composites it); the see-through-ness blends normally.
+  const glow = { transparent: true, depthWrite: false, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor };
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(40, 1, 1, 10000);
@@ -42,9 +50,9 @@ export function createFx(host) {
         float d = length(gl_PointCoord - 0.5) * 2.0;
         if (d > 1.0) discard;
         float core = pow(1.0 - d, 1.6);
-        gl_FragColor = vec4(mix(vC, vec3(1.0), core * 0.7), vA * min(1.0, core * 1.6));
+        gl_FragColor = vec4(mix(vC, vec3(1.0), core * 0.7) * 1.5, vA * min(1.0, core * 1.8));   // (brighter than the colour: it glows)
       }`,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    ...glow,
   });
   const sparks = new THREE.Points(geo, sparkMat);
   sparks.frustumCulled = false;
@@ -65,7 +73,7 @@ export function createFx(host) {
   function piece(kind) {
     let p = pool.find(q => !q.mesh.visible && q.kind === kind);
     if (!p) {
-      const mat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      const mat = new THREE.MeshBasicMaterial({ ...glow, side: THREE.DoubleSide,
         map: kind === "flash" ? glowTex : null });
       p = { kind, mesh: new THREE.Mesh(kind === "ring" ? ringGeo : flashGeo, mat) };
       scene.add(p.mesh); pool.push(p);
@@ -91,8 +99,9 @@ export function createFx(host) {
 
   // a hit on the key whose top centre is at (x, y) on the stage
   function burst(x, y, color, big, keyW = 20) {
+    if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
-    const n = big ? 80 : 44;
+    const n = big ? 90 : 50;
     for (let i = 0; i < n; i++) {
       const k = next; next = (next + 1) % MAX;
       const a = (Math.random() - 0.5) * 2.2, up = 220 + Math.random() * (big ? 520 : 360);
@@ -103,7 +112,7 @@ export function createFx(host) {
       const white = Math.random() < 0.3;
       col[k * 3] = white ? 1 : c.r; col[k * 3 + 1] = white ? 1 : c.g; col[k * 3 + 2] = white ? 1 : c.b;
       born[k] = now; life[k] = 0.55 + Math.random() * (big ? 0.75 : 0.5);
-      base[k] = 9 + Math.random() * (big ? 14 : 9);
+      base[k] = 14 + Math.random() * (big ? 20 : 12);
     }
     // a ring of light spreading over the keys (lying flat, seen at an angle)
     const ring = piece("ring");
@@ -134,7 +143,7 @@ export function createFx(host) {
       alive++;
       vel[k * 3] *= drag; vel[k * 3 + 2] *= drag; vel[k * 3 + 1] = vel[k * 3 + 1] * drag - 900 * dt;   // air and gravity
       pos[k * 3] += vel[k * 3] * dt; pos[k * 3 + 1] += vel[k * 3 + 1] * dt; pos[k * 3 + 2] += vel[k * 3 + 2] * dt;
-      alpha[k] = (1 - age) * (1 - age) * Math.min(1, age * 12);
+      alpha[k] = Math.pow(1 - age, 1.3) * Math.min(1, age * 12);
       size[k] = base[k] * (1 - age * 0.5);
     }
     for (const p of pool) {
@@ -143,7 +152,7 @@ export function createFx(host) {
       if (a >= 1) { p.mesh.visible = false; continue; }
       alive++;
       const e = 1 - Math.pow(1 - a, 3);
-      if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a) * 0.75; }
+      if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * 0.9; }
       else { const r = p.r * (0.6 + 0.6 * e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a); }
     }
     for (const n of ["position", "color", "alpha", "size"]) geo.attributes[n].needsUpdate = true;

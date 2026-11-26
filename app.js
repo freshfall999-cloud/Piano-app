@@ -517,7 +517,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=2").then(m => {
+    fxLoading = import("./fx3d.js?v=3").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H);
@@ -528,7 +528,7 @@
     const k = keyOf(midi), x = k.x + k.w / 2, now = performance.now();
     beams.push({ x, w: k.w, color, t: now });
     if (reduceMotion) return;
-    if (fx) { try { fx.burst(x, kbTop, color, big, k.w); return; } catch (e) { console.warn("3D effects off:", e); fx = null; } }
+    if (fx) { try { fx.burst(x, kbTop, color, big, k.w); return; } catch (e) { console.warn("3D effects off:", e); try { fx.dispose(); } catch (e2) {} fx = null; setTimeout(() => setFx(ui.fx3d.checked), 3000); } }
     const n = big ? 34 : 18;
     for (let i = 0; i < n; i++) {
       const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.9, v = 120 + Math.random() * (big ? 320 : 220);
