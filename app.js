@@ -487,7 +487,7 @@
     ui.restart.hidden = true; ui.pause.hidden = true;
     const def = SONGS[ui.song.value];
     $("readyTitle").textContent = def.title;
-    $("readySub").textContent = [def.by, def.level, def.left || (def.notes && def.notes.some(n => n[3])) ? "two hands" : "one hand", def.pedal && def.pedal.length ? "pedal" : ""].filter(Boolean).join(" · ");
+    $("readySub").textContent = [def.by, def.model ? "made with " + def.model : "", def.level, def.left || (def.notes && def.notes.some(n => n[3])) ? "two hands" : "one hand", def.pedal && def.pedal.length ? "pedal" : ""].filter(Boolean).join(" · ");
     ui.ready.hidden = !$("home").hidden || !!drill || !!train;
     updateHud();
   }
@@ -1964,7 +1964,7 @@
     return new Blob(chunks, { type: "application/pdf" });
   }
   let printed = null;
-  const defaultBy = def => def.notes ? (def.by === "Imported" ? "From a MIDI file" : "Arranged by Keyfall from a recording") : def.by || "";
+  const defaultBy = def => def.notes ? (def.by === "Imported" ? "From a MIDI file" : "Arranged by Keyfall from a recording" + (def.model ? " (" + def.model + ")" : "")) : def.by || "";
   function openPrintView() {
     const view = $("printView"), box = $("printPages"), def = song.def, key = "keyfall:printname:" + def.title;
     // your own title and name on the page (remembered for this song)
@@ -2289,7 +2289,9 @@
         }
         const st = document.createElement("span"); st.className = "st";
         for (let k = 0; k < 3; k++) { const x = document.createElement("i"); x.textContent = "★"; if (k < stars) x.className = "on"; st.append(x); }
-        b.append(t, by, st);
+        b.append(t, by);
+        if (s.model) { const md = document.createElement("span"); md.className = "mdl"; md.textContent = "Made with " + s.model; b.append(md); }
+        b.append(st);
         b.style.setProperty("--i", grid.children.length);
         b.onclick = () => { ui.song.value = i; $("home").hidden = true; songChanged(); sfx("open"); };
         grid.append(b);
@@ -2332,10 +2334,15 @@
       for (const n of c) n.left = +(n.midi < (cut ?? split));
     }
   }
-  let lastFail = "";
+  let lastFail = "", usedModel = "";
+  // the note finder's name as shown on the song afterwards ("Made with …")
+  const MODEL_NAMES = { best: "Google Onsets and Frames", transkun: "Transkun", tkaug: "Transkun V2 Aug", qmul: "Queen Mary / Yamaha",
+    bytedance: "ByteDance", sony: "Sony hFT-Transformer", standard: "Spotify Basic Pitch", arrange: "Songs → piano version (Basic Pitch)",
+    demucs: "Demucs + ByteDance", ymt3: "YourMT3+", muscriptor: "MuScriptor", song: "Spotify Basic Pitch (songs)" };
   const appleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   async function transcribe(file, progress) {
     progress("Reading the recording…");
+    usedModel = MODEL_NAMES[ui.finder.value] || "";
     let data;
     try { data = await file.arrayBuffer(); }
     catch (e) { throw new Error("couldn't open the file (" + (e && (e.name || e.message)) + "). If it's in iCloud Drive, open it in the Files app first so it downloads, then try again"); }
@@ -2391,7 +2398,9 @@
       const a = KeyfallArrange.arrange(found.map(n => [n.midi, n.start, n.end - n.start, n.amp]), found.raw.frames, found.flux);
       if (a && a.notes.length) return { notes: a.notes, pedal: null, beat: a.beat, bar0: a.bar0 };
     }
-    if (!kept) { const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress, ui.finder.value === "song" ? { onset: 0.5, frame: 0.25 } : {}); }
+    if (!kept) {
+      usedModel = ui.finder.value === "song" ? MODEL_NAMES.song : MODEL_NAMES.standard;   // (also when the chosen finder failed)
+      const mono = await resample(decoded, 22050); decoded = null; kept = await standardNotes(mono, progress, ui.finder.value === "song" ? { onset: 0.5, frame: 0.25 } : {}); }
     if (!kept.length) throw new Error("No piano notes were found in that recording.");
     assignHands(kept);
     const t0 = kept[0].start, loud = Math.max(...kept.map(n => n.amp)), r = x => Math.round(x * 1000) / 1000;
@@ -2623,6 +2632,7 @@
       }
       const notes = got.notes;
       SONGS.push({ title, by: got.beat ? "Piano arrangement" : isMidi ? "Imported" : "From a recording", level: "My songs", notes,
+        ...(isMidi ? {} : { model: usedModel }),
         ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}), ...(got.beat ? { beat: got.beat, bar0: got.bar0 } : {}) });
       saveImported(); refreshOptions();
       msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard, Extra hard or Extra extra hard when you open it.` +

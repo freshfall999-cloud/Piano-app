@@ -96,6 +96,7 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .song.hard { border-left-color: #ff6b7d; }
 .song .t { font-size: 16px; font-weight: 600; color: #fff; }
 .song .by { color: #a3a8bd; font-size: 13px; }
+.song .mdl { color: #7fd4ff; font-size: 12px; margin-top: -2px; }
 .song .st { font-size: 18px; letter-spacing: 3px; color: #3a3f56; }
 .song .st i { font-style: normal; }
 .song .st .on { color: #ffcc4d; }
