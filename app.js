@@ -2566,8 +2566,12 @@
         lastFail = "";
         const crumb = step => { try { localStorage.setItem("keyfall:importing", JSON.stringify({ finder: ui.finder.options[ui.finder.selectedIndex].text, step, at: Date.now() })); } catch (e) {} };
         crumb("starting");
-        let lastCrumb = 0;
-        got = await transcribe(f, t => { msg.textContent = t; if (performance.now() - lastCrumb > 2000) { lastCrumb = performance.now(); crumb(t); } });
+        let lastCrumb = 0, lastKind = "";
+        got = await transcribe(f, t => {
+          msg.textContent = t;
+          const kind = t.replace(/[\d.]+\s*(%|MB|min)/g, "");             // a new step is always noted; a step's % at most every 2 s
+          if (kind !== lastKind || performance.now() - lastCrumb > 2000) { lastKind = kind; lastCrumb = performance.now(); crumb(t); }
+        });
       }
       const notes = got.notes;
       SONGS.push({ title, by: got.beat ? "Piano arrangement" : isMidi ? "Imported" : "From a recording", level: "My songs", notes,
