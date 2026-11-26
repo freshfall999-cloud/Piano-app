@@ -2129,7 +2129,7 @@
         if (s.notes) {
           const x = document.createElement("span"); x.className = "del"; x.textContent = "✕"; x.title = "Remove this song";
           x.onclick = ev => { ev.stopPropagation(); SONGS.splice(SONGS.indexOf(s), 1); saveImported(); refreshOptions(); songChanged(); showHome(); };
-          const rn = document.createElement("span"); rn.className = "ren"; rn.textContent = "✎"; rn.title = "Rename this song";
+          const rn = document.createElement("span"); rn.className = "ren"; rn.textContent = "✎ Rename"; rn.setAttribute("role", "button"); rn.title = "Rename this song";
           rn.onclick = ev => {
             ev.stopPropagation();
             const name = prompt("Name this song:", s.title);
