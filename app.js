@@ -309,7 +309,7 @@
       const have = new Set(notes.map(n => n.midi + "@" + n.start));
       const add = (n, midi, hand, dur = n.dur) => {
         if (midi < 21 || have.has(midi + "@" + n.start)) return;
-        have.add(midi + "@" + n.start); out.push({ ...n, midi, hand, dur, state: "pending", played: false });
+        have.add(midi + "@" + n.start); out.push({ ...n, midi, hand, dur, vel: 0.75, state: "pending", played: false });
       };
       let lastBass = -1e9;
       for (const g of groups) {
@@ -338,49 +338,75 @@
     return out;
   }
 
-  // Extra extra hard: the Extra hard version, and then
-  //  · the right hand plays full chords: under each longer melody note a chord tone fills the octave
-  //    (taken from what the left hand is holding, or a fourth below the melody)
-  //  · the left hand never rests: between its notes it runs in quick notes (half a beat each) over its
-  //    bass note: low, fifth, octave, fifth, … (a pianist's broken-chord accompaniment)
+  // Extra extra hard: the Extra hard version, and then, following the song's own chords (found from the notes
+  // that sound over each bass note: the major or minor triad that fits them best, its root preferably the bass):
+  //  · the right hand plays octave chords: under each melody note of a beat or longer that belongs to the chord, the chord
+  //    note a third or sixth below fills the octave (passing notes stay plain)
+  //  · the left hand never rests: between its notes it runs in half beats (whole beats in fast songs) in an
+  //    Alberti pattern, bottom-top-middle-top of the chord, kept above the low muddy register
+  //  · the added notes are played softer, so the melody still leads
   //  (and the timing to hit a note is much stricter: set when the song starts)
+  const TRIADS = [];
+  for (let r = 0; r < 12; r++) for (const [q, iv] of [["maj", [0, 4, 7]], ["min", [0, 3, 7]]]) TRIADS.push({ root: r, q, pcs: iv.map(i => (r + i) % 12) });
+  function chordOf(notes, a, b, bassPc) {
+    const w = new Array(12).fill(0);
+    for (const n of notes) { const o = Math.min(b, n.start + n.dur) - Math.max(a, n.start); if (o > 0) w[n.midi % 12] += o * (n.midi < 60 ? 1.3 : 1); }
+    w[bassPc] += (b - a) * 1.5;
+    let best = null;
+    for (const t of TRIADS) {
+      let sc = 0;
+      for (let pc = 0; pc < 12; pc++) sc += t.pcs.includes(pc) ? w[pc] : -0.8 * w[pc];
+      if (t.root === bassPc) sc += (b - a) * 0.6;
+      if (!best || sc > best.sc) best = { ...t, sc };
+    }
+    return best;
+  }
   function insane(notes, beat) {
     const out = notes.slice(), have = new Set(notes.map(n => n.midi + "@" + n.start.toFixed(3)));
-    const add = (ref, midi, hand, start, dur) => {
+    const add = (ref, midi, hand, start, dur, vel) => {
       const k = midi + "@" + start.toFixed(3);
       if (midi < 21 || midi > 108 || have.has(k)) return;
-      have.add(k); out.push({ ...ref, midi, hand, start, dur, amp: (ref.amp ?? 1) * 0.8, state: "pending", played: false });
+      have.add(k); out.push({ ...ref, midi, hand, start, dur, vel, state: "pending", played: false });
     };
     const end = Math.max(...notes.map(n => n.start + n.dur));
     const groups = [];
     for (const n of notes) { const g = groups[groups.length - 1]; if (g && n.start - g[0].start < 0.05) g.push(n); else groups.push([n]); }
+    // the chord over each left-hand note, until the next one
+    const lg = groups.map(g => g.filter(n => n.hand === "left")).filter(g => g.length);
+    const spans = lg.map((g, i) => {
+      const bass = g.reduce((a, b) => b.midi < a.midi ? b : a);
+      const next = i + 1 < lg.length ? lg[i + 1][0].start : end;
+      return { bass, a: bass.start, b: Math.max(next, bass.start + 0.05), chord: chordOf(notes, bass.start, Math.max(next, bass.start + 0.05), bass.midi % 12) };
+    });
+    const chordAt = t => { let c = null; for (const s of spans) { if (s.a > t + 0.03) break; c = s; } return c && t < c.b + beat * 2 ? c.chord : null; };
     // right hand: octave chords
     for (const g of groups) {
       const r = g.filter(n => n.hand === "right");
       if (!r.length || r.length >= 4) continue;
       const mel = r.reduce((a, b) => b.midi > a.midi ? b : a);
-      if (mel.dur < beat * 0.45) continue;                       // fast runs stay in octaves
-      const t = mel.start;
-      const pcs = new Set(notes.filter(n => n.hand === "left" && n.start <= t + 0.03 && n.start + n.dur > t).map(n => n.midi % 12));
-      pcs.delete(mel.midi % 12);
+      if (mel.dur < beat * 0.9) continue;                        // quicker notes and runs stay in plain octaves
+      const ch = chordAt(mel.start);
+      if (!ch || !ch.pcs.includes(mel.midi % 12)) continue;       // a passing note: leave it plain
       let pick = null;
-      for (let m = mel.midi - 3; m >= mel.midi - 9; m--) if (pcs.has(m % 12) && !r.some(n => n.midi === m)) { pick = m; break; }
-      if (pick === null) pick = mel.midi - 5;
-      if (r.some(n => n.midi === pick)) continue;
-      add(mel, pick, "right", t, mel.dur);
+      for (const d of [3, 4, 8, 9, 5]) {                          // a third or sixth below sounds sweetest
+        const m = mel.midi - d;
+        if (ch.pcs.includes(m % 12) && !r.some(n => n.midi === m)) { pick = m; break; }
+      }
+      if (pick !== null) add(mel, pick, "right", mel.start, mel.dur, 0.55);
     }
-    // left hand: broken-chord eighths over each bass note until the next left-hand note
-    const lg = groups.map(g => g.filter(n => n.hand === "left")).filter(g => g.length);
-    const step = beat / 2;
-    lg.forEach((g, i) => {
-      const bass = g.reduce((a, b) => b.midi < a.midi ? b : a);
-      let root = bass.midi;
-      while (root < 36) root += 12;
-      const next = i + 1 < lg.length ? lg[i + 1][0].start : end;
-      const stop = Math.min(next, bass.start + beat * 4, end) - 0.06;
-      const pattern = [0, 7, 12, 7];
-      for (let k = 1, t = bass.start + step; t < stop; k++, t += step) add(bass, root + pattern[k % 4], "left", t, step * 0.95);
-    });
+    // left hand: an Alberti pattern over each bass note
+    const step = beat >= 0.42 ? beat / 2 : beat;
+    for (const { bass, a, b, chord } of spans) {
+      let low = bass.midi;
+      while (low < 45) low += 12;                                  // (low notes this quick turn to mud)
+      while (low > 57) low -= 12;
+      const above = pc => { let m = low + 1; while (m % 12 !== pc) m++; return m; };
+      const ups = chord.pcs.filter(pc => pc !== low % 12).map(above).sort((x, y) => x - y);
+      if (ups.length < 2) continue;
+      const pattern = [low, ups[ups.length - 1], ups[0], ups[ups.length - 1]];   // bottom, top, middle, top
+      const stop = Math.min(b, a + beat * 4, end) - 0.06;
+      for (let k = 1, t = a + step; t < stop; k++, t += step) add(bass, pattern[k % 4], "left", t, step * 0.95, 0.5);
+    }
     return out;
   }
 
@@ -606,7 +632,7 @@
       if (!isUser(n)) {
         if (!n.played) {
           n.played = true; n.state = "hit";
-          if (!mic.on) noteOn(n.midi, 0.6);                // silent while listening: the microphone would hear it
+          if (!mic.on) noteOn(n.midi, 0.6 * (n.vel ?? 1));                // silent while listening: the microphone would hear it
           autoDown.set(n.midi, n.start + n.dur * 0.92);
         }
       } else if (mode() === "play" && n.state === "pending" && time > n.start + lateBy()) {
