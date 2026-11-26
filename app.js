@@ -139,7 +139,8 @@
     const pedal = ui.pedal.value === "off" ? [] : pedalOf(def, barList, end, beat, cut);
     // a recording without pedal marks: let its notes ring on to the next one instead
     if (def.notes && !def.beat && !(def.pedal && def.pedal.length)) letRing(uniq, beat);
-    return { def, notes: uniq, end, beat, bars: barList, pedal };
+    const handy = playable(uniq);
+    return { def, notes: handy, end, beat, bars: barList, pedal };
   }
   // When the sustain pedal is down: [[down, up], ...] in song time. From the file (MIDI pedal, or the pedal
   // Transkun hears in a recording), or for built-in pieces that are played with pedal: re-pedalled every bar
@@ -182,6 +183,75 @@
         if (j < hs.length) n.dur = Math.max(n.dur, Math.min(hs[j].start - n.start, beat * 2));
       }
     }
+  }
+  // ---------- Playable by real hands ----------
+  // Every chord is split between the hands so neither stretches more than an octave or plays more than five keys.
+  // The split stays as written when that already works; otherwise the notes are shared out again (the lowest
+  // notes to the left hand, the highest to the right, close to where each hand just was). A note neither hand can
+  // reach moves by an octave to a hand that can (same harmony), or is left out. A note still held when its hand has
+  // to move further than it can reach is let go at that moment (the pedal, if down, keeps it sounding).
+  const SPAN = 12, MAX_KEYS = 5;
+  function playable(notes) {
+    const span = g => g.length ? g[g.length - 1].midi - g[0].midi : 0;
+    const centre = g => g.length ? (g[0].midi + g[g.length - 1].midi) / 2 : null;
+    const out = [], held = { left: [], right: [] }, last = { left: null, right: null }, lastT = { left: -9, right: -9 };
+    for (let i = 0; i < notes.length;) {
+      let j = i; while (j < notes.length && notes[j].start - notes[i].start < 0.04) j++;
+      const t = notes[i].start;
+      let ch = notes.slice(i, j).sort((a, b) => a.midi - b.midi).filter((n, k, a) => !k || a[k - 1].midi !== n.midi);
+      i = j;
+      // the best split: lowest k notes to the left hand, the rest to the right
+      const trySplit = ch => {
+        let best = null;
+        for (let k = 0; k <= ch.length; k++) {
+          const L = ch.slice(0, k), R = ch.slice(k);
+          if (span(L) > SPAN || span(R) > SPAN || L.length > MAX_KEYS || R.length > MAX_KEYS) continue;
+          let cost = 0;
+          L.forEach(n => { if (n.hand !== "left") cost += 2; }); R.forEach(n => { if (n.hand !== "right") cost += 2; });
+          for (const [hand, g] of [["left", L], ["right", R]]) {
+            if (!g.length || last[hand] === null) continue;
+            const move = Math.abs(centre(g) - last[hand]);
+            cost += move / 24;
+            if (t - lastT[hand] < 0.16 && move > 14) cost += 3;   // a leap too far for the time: better for the other hand
+          }
+          if (!best || cost < best.cost) best = { cost, L, R };
+        }
+        return best;
+      };
+      let pick = trySplit(ch);
+      if (!pick) {                                         // too wide or too many: keep the melody and the bass, fit the rest in
+        const top = ch[ch.length - 1], bot = ch[0];
+        const R = [top], L = [bot], have = new Set([top.midi, bot.midi]);
+        const middle = ch.slice(1, -1).reverse();            // highest first: the notes nearest the melody matter most
+        for (const n of middle) {
+          const tries = [0, -12, 12, -24, 24, -36, 36].map(d => n.midi + d);   // as written first, then octaves nearby
+          const spot = [[R, top.midi - SPAN, top.midi], [L, bot.midi, bot.midi + SPAN]];
+          let done = false;
+          for (const m of tries) {
+            for (const [g, lo, hi] of spot) {
+              if (done || g.length >= MAX_KEYS || m < lo || m > hi || have.has(m)) continue;
+              n.midi = m; g.push(n); have.add(m); done = true;
+            }
+            if (done) break;
+          }
+        }
+        L.sort((a, b) => a.midi - b.midi); R.sort((a, b) => a.midi - b.midi);
+        pick = { L, R };
+      }
+      for (const [hand, g] of [["left", pick.L], ["right", pick.R]]) {
+        if (!g.length) continue;
+        g.forEach(n => { n.hand = hand; out.push(n); });
+        // notes this hand is still holding that would make the stretch too wide: let go now
+        const still = held[hand].filter(h => h.start + h.dur > t + 0.05 && !g.includes(h));
+        for (const h of still) {
+          const lo = Math.min(h.midi, g[0].midi), hi = Math.max(h.midi, g[g.length - 1].midi);
+          if (hi - lo > SPAN || still.length + g.length > MAX_KEYS) h.dur = Math.max(0.05, t - h.start - 0.01);
+        }
+        held[hand] = [...still.filter(h => h.start + h.dur > t + 0.05), ...g];
+        last[hand] = centre(g); lastT[hand] = t;
+      }
+    }
+    return out.sort((a, b) => a.start - b.start || a.midi - b.midi);
   }
   // a recording has no written tempo: take the typical time between notes as the beat (between 0.35 and 0.9 s)
   function guessBeat(notes) {
@@ -1677,7 +1747,7 @@
 
   // ---------- Printable sheet music: letter-size pages, black on white, as a PDF to download or to print ----------
   const PAGE_W = 1700, PAGE_H = 2200, MARGIN = 130, PSP = 13;       // 8.5 × 11 in at 200 dots an inch; staff 6.6 mm tall
-  function printPages(labels) {
+  function printPages(labels, meta = {}) {
     const saved = { ctx, sheet, W, kbTop, printing };
     const pages = [];
     try {
@@ -1701,12 +1771,12 @@
         ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, PAGE_W, PAGE_H);
         if (pi === 0) {
           ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
-          ctx.font = `700 64px Georgia, "Times New Roman", serif`; ctx.fillText(def.title, PAGE_W / 2, MARGIN + 70, PAGE_W - 2 * MARGIN);
+          ctx.font = `700 64px Georgia, "Times New Roman", serif`; ctx.fillText(meta.title || def.title, PAGE_W / 2, MARGIN + 70, PAGE_W - 2 * MARGIN);
           const level = { easy: "Easy", medium: "Medium", hard: "", extra: "Extra hard" }[ui.level.value] || "";
           ctx.font = `italic 30px Georgia, "Times New Roman", serif`;
           ctx.fillText([level && level + " version", "for piano"].filter(Boolean).join(" "), PAGE_W / 2, MARGIN + 120);
           ctx.textAlign = "right"; ctx.font = `30px Georgia, "Times New Roman", serif`;
-          ctx.fillText(def.notes ? (def.by === "Imported" ? "From a MIDI file" : "Arranged by Keyfall from a recording") : def.by || "", PAGE_W - MARGIN, MARGIN + 190);
+          ctx.fillText(meta.by !== undefined ? meta.by : defaultBy(def), PAGE_W - MARGIN, MARGIN + 190, PAGE_W / 2 - MARGIN);
           const qy = MARGIN + 250, qx = MARGIN + 10;                     // the tempo: a quarter note = beats a minute
           ctx.save(); ctx.translate(qx, qy - 6); ctx.rotate(-0.33); ctx.beginPath(); ctx.ellipse(0, 0, 10, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
           ctx.fillRect(qx + 7, qy - 46, 2.6, 40);
@@ -1748,11 +1818,23 @@
     return new Blob(chunks, { type: "application/pdf" });
   }
   let printed = null;
+  const defaultBy = def => def.notes ? (def.by === "Imported" ? "From a MIDI file" : "Arranged by Keyfall from a recording") : def.by || "";
   function openPrintView() {
-    const view = $("printView"), box = $("printPages");
+    const view = $("printView"), box = $("printPages"), def = song.def, key = "keyfall:printname:" + def.title;
+    // your own title and name on the page (remembered for this song)
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (e) {}
+    $("printTitle").value = saved.title || def.title;
+    $("printBy").value = saved.by !== undefined ? saved.by : defaultBy(def);
+    const meta = () => ({ title: $("printTitle").value.trim() || def.title, by: $("printBy").value.trim() });
+    let typing = 0;
+    $("printTitle").oninput = $("printBy").oninput = () => {
+      try { localStorage.setItem(key, JSON.stringify(meta())); } catch (e) {}
+      clearTimeout(typing); typing = setTimeout(render, 450);
+    };
     const render = () => {
       box.textContent = "";
-      printed = printPages($("printNames").checked);
+      printed = printPages($("printNames").checked, meta());
       for (const cv of printed) { const img = new Image(); img.src = cv.toDataURL("image/png"); img.alt = "Sheet music page"; box.append(img); }
       $("printInfo").textContent = `${printed.length} page${printed.length > 1 ? "s" : ""} · ${{ easy: "Easy", medium: "Medium", hard: "Hard", extra: "Extra hard" }[ui.level.value]} version (change it on the start card)`;
     };
@@ -1760,7 +1842,7 @@
     $("printClose").onclick = () => { view.hidden = true; box.textContent = ""; printed = null; };
     $("printPdf").onclick = () => {
       const url = URL.createObjectURL(pdfFromPages(printed)), a = document.createElement("a");
-      a.href = url; a.download = song.def.title.replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
+      a.href = url; a.download = meta().title.replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     };
@@ -2475,5 +2557,5 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
   requestAnimationFrame(frame);
 
-  window.__keyfall = { held: () => [...autoDown.keys()].length, get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { held: () => [...autoDown.keys()].length, get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, loadSong, playable, get stats() { return { score, hits, misses, wrong }; } };
 })();
