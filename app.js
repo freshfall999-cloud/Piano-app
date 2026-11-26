@@ -469,7 +469,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=1").then(m => {
+    fxLoading = import("./fx3d.js?v=2").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H);
@@ -2285,6 +2285,7 @@
     }
   }
   let lastFail = "";
+  const appleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   async function transcribe(file, progress) {
     progress("Reading the recording…");
     let data;
@@ -2359,14 +2360,14 @@
   async function demucsPiano(left, right, progress) {
     progress("Getting Demucs ready (55 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=8");
+      const wk = new Worker("onnx-worker.js?v=9");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading Demucs… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Pulling the piano out of the song with Demucs… ${Math.round(data.value * 100)}%`);
         else { wk.terminate(); data.type === "done" ? ok(data.piano) : fail(new Error(data.message)); }
       };
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
-      wk.postMessage({ model: "demucs", left, right, base: new URL("vendor/", location.href).href });
+      wk.postMessage({ model: "demucs", left, right, base: new URL("vendor/", location.href).href, lowMemory: appleMobile });
     });
   }
   // Turn the file's bytes into sound. First with the page's audio context; if that fails (iOS sometimes refuses
@@ -2447,14 +2448,14 @@
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=8");
+      const wk = new Worker("onnx-worker.js?v=9");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
         else { wk.terminate(); data.type === "done" ? ok(data) : fail(new Error(data.message)); }
       };
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
-      const job = { model, samples, base: new URL("vendor/", location.href).href };
+      const job = { model, samples, base: new URL("vendor/", location.href).href, lowMemory: appleMobile };
       try { wk.postMessage(job, [samples.buffer]); } catch (e) { wk.postMessage(job); }   // hand the sound over instead of copying it
     });
     const kept = notes.notes.filter(([p, s, e]) => p >= 21 && p <= 108 && e - s >= 0.03)

@@ -46,18 +46,20 @@ function halfToFloat(u8) {
   for (let i = 0; i < h.length; i++) f[i] = F16[h[i]];
   return f;
 }
-let providers = null;
+let providers = null, lowMemory = false;          // lowMemory: an iPad/iPhone, where the graphics chip shares the page's memory
 // on the graphics chip if the browser has one; if it fails there (at creation or while running), on the processor
 async function session(name, label) {
   const graph = await fetchBuf("models/" + name + ".onnx");
-  const weights = halfToFloat(await fetchBuf("models/" + name + ".f16", label));
-  const create = eps => ort.InferenceSession.create(graph, { externalData: [{ path: name + ".f32", data: new Uint8Array(weights.buffer) }], graphOptimizationLevel: "all", executionProviders: eps });
+  let weights = halfToFloat(await fetchBuf("models/" + name + ".f16", label));
+  const create = eps => ort.InferenceSession.create(graph, { externalData: [{ path: name + ".f32", data: new Uint8Array(weights.buffer) }], graphOptimizationLevel: "all",
+    executionProviders: eps, enableCpuMemArena: !lowMemory });
   if (!providers) {
     providers = ["wasm"];
     try { if (self.navigator.gpu && await navigator.gpu.requestAdapter()) providers = ["webgpu", "wasm"]; } catch (e) {}
   }
-  let onGpu = providers[0] === "webgpu", s;
+  let onGpu = providers[0] === "webgpu" && !(lowMemory && /^(transkun|tkaug)/.test(name)), s;   // Transkun is the heaviest: on an iPad, the processor only
   try { s = await create(onGpu ? providers : ["wasm"]); } catch (e) { if (!onGpu) throw e; onGpu = false; s = await create(["wasm"]); }
+  if (!onGpu) weights = null;                               // (the processor has its own copy now; keep one only to fall back to)
   // on the graphics chip: give up on it if it errors or hands back broken numbers
   const sane = out => Object.values(out).every(t => { const d = t.data; if (!d || !d.length || typeof d[0] !== "number") return true; for (let i = 0; i < d.length; i += Math.max(1, d.length >> 12)) if (!Number.isFinite(d[i])) return false; return true; });
   const toCpu = async why => {
@@ -200,7 +202,7 @@ async function transkun(audio, name = "transkun") {          // "transkun" (V2 a
     const D = ctx.dims[3], C = ctx.data;                    // [1, 90, T, D]
     // best set of non-overlapping notes for each key (semi-Markov Viterbi, scored backwards from the end)
     const paths = new Array(PITCH.length);
-    const CHUNK = 10;
+    const CHUNK = lowMemory ? 4 : 10;                       // keys scored at a time (fewer: less memory)
     for (let s0 = 0; s0 < PITCH.length; s0 += CHUNK) {
       const n = Math.min(CHUNK, PITCH.length - s0);
       const part = new ort.Tensor("float32", C.subarray(s0 * T * D, (s0 + n) * T * D), [1, n, T, D]);
@@ -443,6 +445,7 @@ self.onmessage = async ({ data }) => {
     importScripts(base + "ort/ort.webgpu.min.js");
     ort.env.wasm.wasmPaths = base + "ort/";
     ort.env.wasm.numThreads = 1;                            // (several threads need a page setting GitHub Pages can't give)
+    lowMemory = !!data.lowMemory;
     if (data.model === "demucs") { const piano = await demucsPiano(data.left, data.right); self.postMessage({ type: "done", piano }, [piano.buffer]); return; }
     const r = data.model === "transkun" ? await transkun(data.samples) : data.model === "tkaug" ? await transkun(data.samples, "tkaug") : data.model === "sony" ? await sony(data.samples)
       : data.model === "qmul" ? await bytedance(data.samples, "qmul", "Queen Mary / Yamaha model") : await bytedance(data.samples);

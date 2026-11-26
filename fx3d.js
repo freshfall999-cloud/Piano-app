@@ -155,7 +155,7 @@ export function createFx(host) {
     cancelAnimationFrame(raf); raf = 0;
     geo.dispose(); sparkMat.dispose(); ringGeo.dispose(); flashGeo.dispose(); glowTex.dispose();
     pool.forEach(p => p.mesh.material.dispose());
-    renderer.dispose(); canvas.remove();
+    renderer.dispose(); renderer.forceContextLoss(); canvas.remove();   // (hand the graphics memory back right away)
   }
 
   return { burst, resize, dispose };
