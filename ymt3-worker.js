@@ -83,10 +83,10 @@ async function session(name, label, processorOnly = false) {
     get backend() { return onGpu ? "webgpu" : "wasm"; },
     async run(feeds) {
       if (!onGpu) return await s.run(feeds);
-      // on the graphics chip: give up on it if it errors, hangs (some iPads), or hands back broken numbers
+      // on the graphics chip: give up on it if it errors or hands back broken numbers
       const toCpu = async why => { console.warn(name + ": graphics chip " + why + ", using the processor"); onGpu = false; try { s.release && s.release(); } catch (e) {} s = await create(["wasm"]); return await s.run(feeds); };
       let out;
-      try { out = await Promise.race([s.run(feeds), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 120000))]); }
+      try { out = await s.run(feeds); }
       catch (e) { return await toCpu("failed (" + (e && e.message || e) + ")"); }
       for (const t of Object.values(out)) {
         const d = t.data; if (!d || !d.length || typeof d[0] !== "number") continue;

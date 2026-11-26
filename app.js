@@ -2284,6 +2284,7 @@
       for (const n of c) n.left = +(n.midi < (cut ?? split));
     }
   }
+  let lastFail = "";
   async function transcribe(file, progress) {
     progress("Reading the recording…");
     let data;
@@ -2306,8 +2307,14 @@
       if (!kept.length) throw new Error("No piano notes were found in that recording (Demucs found no piano in it).");
     } else if (ONNX_MODELS[ui.finder.value]) {
       const m = ui.finder.value;
-      try { kept = await onnxNotes(m, await resample(decoded, m === "transkun" || m === "tkaug" ? 44100 : 16000), progress); }
-      catch (e) { console.warn(m + " finder failed:", e); progress("That note finder didn't work on this device; using the standard one…"); }
+      const samples = await resample(decoded, m === "transkun" || m === "tkaug" ? 44100 : 16000);
+      decoded = null;                                       // (free the full recording while the model works; the file is still here)
+      try { kept = await onnxNotes(m, samples, progress); }
+      catch (e) {
+        console.warn(m + " finder failed:", e); progress("That note finder didn't work on this device; using the standard one…");
+        lastFail = (e && e.message) || String(e);
+        decoded = await decodeAudio(data);
+      }
     }
     if (ui.finder.value === "muscriptor") {
       const token = hfToken();
@@ -2352,7 +2359,7 @@
   async function demucsPiano(left, right, progress) {
     progress("Getting Demucs ready (55 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=7");
+      const wk = new Worker("onnx-worker.js?v=8");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading Demucs… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Pulling the piano out of the song with Demucs… ${Math.round(data.value * 100)}%`);
@@ -2440,14 +2447,15 @@
     const [name, mb] = ONNX_MODELS[model];
     progress(`Getting the ${name} note finder ready (${mb} MB, only the first time)…`);
     const notes = await new Promise((ok, fail) => {
-      const wk = new Worker("onnx-worker.js?v=7");
+      const wk = new Worker("onnx-worker.js?v=8");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") progress(`Finding every note with ${name}… ${Math.round(data.value * 100)}%`);
         else { wk.terminate(); data.type === "done" ? ok(data) : fail(new Error(data.message)); }
       };
       wk.onerror = e => { wk.terminate(); fail(new Error(e.message || "worker")); };
-      wk.postMessage({ model, samples, base: new URL("vendor/", location.href).href });
+      const job = { model, samples, base: new URL("vendor/", location.href).href };
+      try { wk.postMessage(job, [samples.buffer]); } catch (e) { wk.postMessage(job); }   // hand the sound over instead of copying it
     });
     const kept = notes.notes.filter(([p, s, e]) => p >= 21 && p <= 108 && e - s >= 0.03)
       .map(([midi, start, end, vel]) => ({ midi, start, end, amp: Math.max(0.05, vel / 127) }))
@@ -2476,7 +2484,7 @@
   async function ymt3Notes(s16, s22, progress) {
     progress("Getting YourMT3+ ready (95 MB, only the first time)…");
     return await new Promise((ok, fail) => {
-      const wk = new Worker("ymt3-worker.js?v=4");
+      const wk = new Worker("ymt3-worker.js?v=5");
       wk.onmessage = ({ data }) => {
         if (data.type === "download") progress(`Downloading the ${data.value.label}… ${data.value.f != null ? Math.round(data.value.f * 100) + "%" : Math.round(data.value.mb) + " MB"} (only the first time)`);
         else if (data.type === "progress") {
@@ -2553,13 +2561,19 @@
       if (isMidi) got = parseMidi(await f.arrayBuffer());
       else {
         $("importBtn").classList.add("busy");
-        got = await transcribe(f, t => { msg.textContent = t; });
+        setFx(false);                                     // (give the graphics memory to the note finder)
+        lastFail = "";
+        const crumb = step => { try { localStorage.setItem("keyfall:importing", JSON.stringify({ finder: ui.finder.options[ui.finder.selectedIndex].text, step, at: Date.now() })); } catch (e) {} };
+        crumb("starting");
+        let lastCrumb = 0;
+        got = await transcribe(f, t => { msg.textContent = t; if (performance.now() - lastCrumb > 2000) { lastCrumb = performance.now(); crumb(t); } });
       }
       const notes = got.notes;
       SONGS.push({ title, by: got.beat ? "Piano arrangement" : isMidi ? "Imported" : "From a recording", level: "My songs", notes,
         ...(got.pedal && got.pedal.length ? { pedal: got.pedal } : {}), ...(got.beat ? { beat: got.beat, bar0: got.bar0 } : {}) });
       saveImported(); refreshOptions();
-      msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.`;
+      msg.textContent = `Added “${title}” (${notes.length} notes). Pick Easy, Medium, Hard or Extra hard when you open it.` +
+        (lastFail ? ` (The chosen note finder failed — “${lastFail.slice(0, 120)}” — so the standard one was used.)` : "");
       sfx("trained");
       showHome();
     } catch (e) {
@@ -2569,8 +2583,19 @@
         : isMidi ? "Couldn't read that file. It needs to be a .mid file."
         : m === "decode" ? "Couldn't read that recording (" + (e.detail || "no details") + "). Try an MP3, M4A or WAV file."
         : "That note finder ran into a problem (" + m.slice(0, 160) + "). Try another “MP3 → notes” choice, and tell Claude what it said.";
-    } finally { $("importBtn").classList.remove("busy"); }
+    } finally {
+      $("importBtn").classList.remove("busy");
+      try { localStorage.removeItem("keyfall:importing"); } catch (e) {}
+      setFx(ui.fx3d.checked);
+    }
   };
+  // if the page was closed in the middle of finding notes (an iPad does that when a tab uses too much memory), say so
+  try {
+    const was = JSON.parse(localStorage.getItem("keyfall:importing") || "null");
+    localStorage.removeItem("keyfall:importing");
+    if (was && Date.now() - was.at < 86400000)
+      $("importMsg").textContent = `Last time the app closed while “${was.finder}” was working (${String(was.step).slice(0, 90)}). The iPad probably ran out of memory: try a shorter recording, close other apps and tabs, or pick another “MP3 → notes” choice.`;
+  } catch (e) {}
   ui.mode.onchange = reset;
   ui.hand.onchange = () => { wantHand = ui.hand.value; reset(); };
   ui.speed.oninput = () => ui.speedVal.textContent = ui.speed.value + "%";

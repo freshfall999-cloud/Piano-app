@@ -58,7 +58,7 @@ async function session(name, label) {
   }
   let onGpu = providers[0] === "webgpu", s;
   try { s = await create(onGpu ? providers : ["wasm"]); } catch (e) { if (!onGpu) throw e; onGpu = false; s = await create(["wasm"]); }
-  // on the graphics chip: give up on it if it errors, hangs (some iPads), or hands back broken numbers
+  // on the graphics chip: give up on it if it errors or hands back broken numbers
   const sane = out => Object.values(out).every(t => { const d = t.data; if (!d || !d.length || typeof d[0] !== "number") return true; for (let i = 0; i < d.length; i += Math.max(1, d.length >> 12)) if (!Number.isFinite(d[i])) return false; return true; });
   const toCpu = async why => {
     console.warn(name + ": graphics chip " + why + ", using the processor");
@@ -71,7 +71,7 @@ async function session(name, label) {
       if (!onGpu) return await s.run(feeds);
       let out;
       try {
-        out = await Promise.race([s.run(feeds), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 120000))]);
+        out = await s.run(feeds);
       } catch (e) { await toCpu("failed (" + (e && e.message || e) + ")"); return await s.run(feeds); }
       if (!sane(out)) { await toCpu("gave broken numbers"); return await s.run(feeds); }
       return out;
