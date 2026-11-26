@@ -14,7 +14,7 @@
   for (const k in KEYMAP) KEYLABEL[KEYMAP[k]] = k.toUpperCase();
 
   const $ = id => document.getElementById(id);
-  const canvas = $("stage"), ctx = canvas.getContext("2d");
+  const canvas = $("stage"); let ctx = canvas.getContext("2d");   // (let: the printable sheet music draws through it too)
   const ui = {
     song: $("song"), mode: $("mode"), hand: $("hand"), speed: $("speed"), speedVal: $("speedVal"),
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
@@ -1151,7 +1151,7 @@
   const SHARP_STEP = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6], FLAT_STEP = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
   const LETTERS = "CDEFGAB";
   let sheet = null;                                     // rebuilt when the song, difficulty or screen size changes
-  function buildSheet() {
+  function buildSheet(print = null) {
     const notes = song.notes, beat = song.beat || 0.5;
     // flats or sharps: whichever this song's black keys suggest (B♭ and E♭ → flats)
     const pcs = new Array(12).fill(0); notes.forEach(n => pcs[n.midi % 12]++);
@@ -1201,9 +1201,9 @@
     }
     let top = 58, bottom = kbTop - 10;
     const h = bottom - top, LINE = 21.5;
-    const left = 10, right = W - 10;
+    const left = print ? print.left : 10, right = print ? print.right : W - 10;
     function pack(sp) {
-      const clefW = sp * 5.4, x0 = left + sp * 2 + clefW, lineW = right - sp * 1.2 - x0;
+      const clefW = sp * (print ? 7.2 : 5.4), x0 = left + sp * 2 + clefW, lineW = right - sp * 1.2 - x0;
       // widths: every note gets room for its head and sharp, longer notes get a little more
       const minW = sp * 3.8, pad = sp * 2.4, w = d => Math.max(minW, sp * (1.6 + 2.6 * Math.sqrt(Math.max(0.25, d))));
       for (const b of bars) {
@@ -1220,7 +1220,7 @@
       return { sp, clefW, x0, lineW, pad, systems };
     }
     // size: the whole song on one page if it can be read there, otherwise as many lines per page as stay readable
-    let pick = null, most = null;
+    let pick = print ? { P: pack(print.sp), rows: 1 } : null, most = null;
     for (let want = 1; want <= 5 && !pick; want++) {
       const sz = Math.max(5, Math.min(12, W / 48, (h - 8) / (want * LINE)));
       if (sz < 8.2 && most) break;
@@ -1229,7 +1229,7 @@
       else if (sz >= 8.2 || !most) most = { P, rows: Math.max(1, Math.floor((h - 8) / (LINE * sz))) };
     }
     if (!pick) pick = { P: most.P, rows: most.rows };
-    else for (let sz = Math.min(12, W / 48); sz > pick.P.sp + 0.2; sz -= 0.25) {   // a song that fits: print it as big as the page allows
+    else if (!print) for (let sz = Math.min(12, W / 48); sz > pick.P.sp + 0.2; sz -= 0.25) {   // a song that fits: print it as big as the page allows
       const P = pack(sz);
       if (P.systems.length * LINE * sz <= h - 8) { pick = { P, rows: P.systems.length }; break; }
     }
@@ -1295,19 +1295,21 @@
     }
     ctx.restore();
   }
-  function drawSheetPage(page, curSys) {
-    const S = sheet, sp = S.sp, now = performance.now(), INK = "#262a36";
-    const target = new Set(mode() === "practice" && state !== "idle" ? nextGroup().filter(n => n.start - time < 0.02) : []);
-    const labels = ui.labels.value === "notes";
+  let printing = null;                                     // set while drawing the printable sheet music
+  function drawSheetPage(page, curSys, list = null) {
+    const S = sheet, sp = S.sp, now = performance.now(), INK = printing ? "#000" : "#262a36";
+    const target = new Set(!printing && mode() === "practice" && state !== "idle" ? nextGroup().filter(n => n.start - time < 0.02) : []);
+    const labels = printing ? printing.labels : ui.labels.value === "notes";
     const rx = sp * (labels ? 0.78 : 0.62), ry = sp * (labels ? 0.56 : 0.44);
     const clefFont = k => `${sp * k}px "Noto Music", "Bravura", "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif`;
     const lastSys = S.systems.length - 1;
-    for (let si = page * S.rows; si < Math.min(S.systems.length, (page + 1) * S.rows); si++) {
+    const lines = list || Array.from({ length: Math.max(0, Math.min(S.systems.length, (page + 1) * S.rows) - page * S.rows) }, (_, i) => page * S.rows + i);
+    for (const si of lines) {
       const s = S.systems[si];
       const yOf = (staff, step) => staff === "t" ? s.trebleBottom - (step - 30) * sp / 2 : s.bassBottom - (step - 18) * sp / 2;
       const lx = S.left + sp * 2;
       // staff lines, brace, clefs
-      ctx.strokeStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = 1;
+      ctx.strokeStyle = printing ? "#000" : "rgba(38,42,54,.75)"; ctx.lineWidth = printing ? Math.max(1, sp * 0.1) : 1;
       for (const b of [s.trebleBottom, s.bassBottom]) for (let i = 0; i < 5; i++) {
         const y = Math.round(b - i * sp) + 0.5; ctx.beginPath(); ctx.moveTo(lx, y); ctx.lineTo(s.end, y); ctx.stroke();
       }
@@ -1323,8 +1325,10 @@
       ctx.fillStyle = "rgba(38,42,54,.5)"; ctx.font = `italic 600 ${Math.round(Math.max(9, sp * 1.05))}px system-ui, sans-serif`;
       ctx.textAlign = "left"; ctx.fillText(String(s.bars[0].num), lx, s.trebleTop - sp * 1.2);
       // bar lines (a double bar at the very end)
-      ctx.fillStyle = "rgba(38,42,54,.85)";
-      for (const b of s.bars) ctx.fillRect(Math.round(b.end) - 1.4, s.trebleTop, 1.4, s.bassBottom - s.trebleTop);
+      if (printing) printExtras(s, si, lx, yOf);
+      ctx.fillStyle = printing ? "#000" : "rgba(38,42,54,.85)";
+      const bw = printing ? Math.max(1.4, sp * 0.12) : 1.4;
+      for (const b of s.bars) ctx.fillRect(Math.round(b.end) - bw, s.trebleTop, bw, s.bassBottom - s.trebleTop);
       if (si === lastSys) { ctx.fillRect(Math.round(s.end) - 4.5, s.trebleTop, 4.5, s.bassBottom - s.trebleTop); ctx.fillRect(Math.round(s.end) - 8.5, s.trebleTop, 1.4, s.bassBottom - s.trebleTop); }
       // sustain pedal: "Ped." where it goes down, a line while it's held, a tick where it lifts
       if (song.pedal && song.pedal.length) {
@@ -1339,7 +1343,7 @@
         }
       }
       // the "you are here" marker on the line being played
-      if (si === curSys && state !== "idle" && time >= s.t0 - 2) {
+      if (!printing && si === curSys && state !== "idle" && time >= s.t0 - 2) {
         const x = sheetX(s, Math.max(0, time)), y0 = s.trebleTop - sp * 2.2, hh = s.bassBottom - s.trebleTop + sp * 4.4;
         const band = ctx.createLinearGradient(x - sp * 2, 0, x + sp * 2, 0);
         band.addColorStop(0, "rgba(57,182,255,0)"); band.addColorStop(0.5, "rgba(57,182,255,.22)"); band.addColorStop(1, "rgba(57,182,255,0)");
@@ -1352,8 +1356,8 @@
         const x = c.x;
         const bottomLine = g.staff === "t" ? 30 : 18;
         const isTarget = g.items.some(i => target.has(i.n));
-        const sounding = mode() !== "practice" && state !== "idle" && g.start <= time + 0.03 && time < g.start + Math.max(0.25, g.dur * 0.9);
-        const past = !isTarget && !sounding && g.start < time - 0.05 && state !== "idle";
+        const sounding = !printing && mode() !== "practice" && state !== "idle" && g.start <= time + 0.03 && time < g.start + Math.max(0.25, g.dur * 0.9);
+        const past = !printing && !isTarget && !sounding && g.start < time - 0.05 && state !== "idle";
         ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.globalAlpha = past ? 0.6 : 1;
         const lo = g.items[0].step, hi = g.items[g.items.length - 1].step;
         for (let st = bottomLine - 2; st >= lo; st -= 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
@@ -1366,7 +1370,7 @@
         let stemColor = INK;
         for (const it of g.items) {
           const n = it.n, user = isUser(n), lit = target.has(n) || (sounding && (user || mode() === "listen") && n.state !== "hit" && n.state !== "miss");
-          const col = n.state === "miss" ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : lit ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
+          const col = printing ? INK : n.state === "miss" ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : lit ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
             : !user && mode() !== "listen" ? "#9aa0ae" : INK;
           if (it === g.items[g.items.length - 1] || lit) stemColor = col;
           const hx = x + (it.side ? (g.up ? rx * 1.9 : -rx * 1.9) : 0), y = yOf(g.staff, it.step);
@@ -1403,6 +1407,147 @@
       }
     }
   }
+
+  // ---------- Printable sheet music: letter-size pages, black on white, as a PDF to download or to print ----------
+  const PAGE_W = 1700, PAGE_H = 2200, MARGIN = 130, PSP = 13;       // 8.5 × 11 in at 200 dots an inch; staff 6.6 mm tall
+  function timeSignature() {
+    const beat = song.beat || 0.5, b = song.bars || [];
+    const lens = b.map((t, i) => (i ? t - b[i - 1] : t) / beat).filter(x => x > 0.5).sort((x, y) => x - y);
+    const n = lens.length ? Math.round(lens[lens.length >> 1]) : 4;
+    return n >= 2 && n <= 7 ? n : 4;
+  }
+  // rests where a staff is silent, and the time signature on the first line (only on paper)
+  function printExtras(s, si, lx, yOf) {
+    const sp = sheet.sp, beat = song.beat || 0.5;
+    ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    if (si === 0) {
+      ctx.font = `700 ${Math.round(sp * 2.85)}px Georgia, "Times New Roman", serif`;
+      const x = lx + sp * 5.7, n = String(printing.timeSig);
+      for (const y of [s.trebleTop, s.bassTop]) { ctx.fillText(n, x, y + sp * 2); ctx.fillText("4", x, y + sp * 4); }
+    }
+    const rest = (staff, x, beats) => {
+      const mid = staff === "t" ? s.trebleBottom - 2 * sp : s.bassBottom - 2 * sp;
+      ctx.fillStyle = ctx.strokeStyle = "#000";
+      if (beats >= 4) { ctx.fillRect(x - sp * 0.6, mid - sp, sp * 1.2, sp * 0.5); return; }          // whole rest: hangs from the 4th line
+      if (beats >= 2) { ctx.fillRect(x - sp * 0.6, mid - sp * 0.5, sp * 1.2, sp * 0.5); return; }    // half rest: sits on the middle line
+      ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.beginPath();
+      const P = (dx, dy) => [x + dx * sp, mid + dy * sp];
+      if (beats >= 1) {                                                                            // quarter rest: the zigzag
+        ctx.lineWidth = sp * 0.3;
+        ctx.moveTo(...P(-0.35, -1.5)); ctx.lineTo(...P(0.35, -0.65)); ctx.lineTo(...P(-0.2, 0.1)); ctx.lineTo(...P(0.35, 0.85));
+        ctx.quadraticCurveTo(...P(-0.55, 0.55), ...P(-0.05, 1.5)); ctx.stroke();
+      } else {                                                                                     // eighth rest: a dot and a slanted stroke
+        ctx.lineWidth = sp * 0.16;
+        ctx.moveTo(...P(-0.4, -0.55)); ctx.quadraticCurveTo(...P(0.05, -0.15), ...P(0.5, -0.75)); ctx.lineTo(...P(-0.05, 1.0)); ctx.stroke();
+        ctx.beginPath(); ctx.arc(...P(-0.35, -0.6), sp * 0.27, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.lineCap = "butt"; ctx.lineJoin = "miter";
+    };
+    for (const b of s.bars) for (const staff of ["t", "b"]) {
+      const gs = b.cols.flatMap(c => c.groups).filter(g => g.staff === staff).sort((x, y) => x.start - y.start);
+      if (!gs.length) { rest(staff, (b.x + b.end) / 2, 4); continue; }
+      let cur = b.t0;
+      const fill = (from, to) => {
+        let left = Math.round((to - from) / beat * 2) / 2, t = from;
+        while (left >= 0.5) { const piece = left >= 2 && Math.abs(((t - b.t0) / beat) % 2) < 0.01 ? 2 : left >= 1 ? 1 : 0.5; rest(staff, sheetX(s, t) + sp * 0.3, piece); t += piece * beat; left -= piece; }
+      };
+      for (const g of gs) { if ((g.start - cur) / beat >= 0.45) fill(cur, g.start); cur = Math.max(cur, g.start + g.dur); }
+      if ((b.t1 - cur) / beat >= 0.45) fill(cur, b.t1);
+    }
+  }
+  function printPages(labels) {
+    const saved = { ctx, sheet, W, kbTop, printing };
+    const pages = [];
+    try {
+      sheet = null; W = PAGE_W;
+      buildSheet({ left: MARGIN - 20, right: PAGE_W - MARGIN, sp: PSP });
+      const S = sheet, def = song.def, sp = PSP, slot = 21.5 * sp, head = 300, foot = 90;
+      // the lines, page by page (the first page starts lower, under the title)
+      let page = -1, y = Infinity, list = [];
+      const layout = [];
+      S.systems.forEach((sys, i) => {
+        const bottom = PAGE_H - MARGIN - foot;
+        if (y + slot > bottom) { page++; y = MARGIN + (page === 0 ? head : 0); layout.push([]); }
+        sys.trebleTop = y + 3.6 * sp; sys.trebleBottom = sys.trebleTop + 4 * sp; sys.bassTop = sys.trebleBottom + 6 * sp; sys.bassBottom = sys.bassTop + 4 * sp;
+        layout[page].push(i); y += slot;
+      });
+      printing = { labels, timeSig: timeSignature() };
+      const bpm = Math.round(60 / (song.beat || 0.5));
+      layout.forEach((lines, pi) => {
+        const cv = document.createElement("canvas"); cv.width = PAGE_W; cv.height = PAGE_H;
+        ctx = cv.getContext("2d");
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+        if (pi === 0) {
+          ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+          ctx.font = `700 64px Georgia, "Times New Roman", serif`; ctx.fillText(def.title, PAGE_W / 2, MARGIN + 70, PAGE_W - 2 * MARGIN);
+          const level = { easy: "Easy", medium: "Medium", hard: "", extra: "Extra hard" }[ui.level.value] || "";
+          ctx.font = `italic 30px Georgia, "Times New Roman", serif`;
+          ctx.fillText([level && level + " version", "for piano"].filter(Boolean).join(" "), PAGE_W / 2, MARGIN + 120);
+          ctx.textAlign = "right"; ctx.font = `30px Georgia, "Times New Roman", serif`;
+          ctx.fillText(def.notes ? (def.by === "Imported" ? "From a MIDI file" : "Arranged by Keyfall from a recording") : def.by || "", PAGE_W - MARGIN, MARGIN + 190);
+          const qy = MARGIN + 250, qx = MARGIN + 10;                     // the tempo: a quarter note = beats a minute
+          ctx.save(); ctx.translate(qx, qy - 6); ctx.rotate(-0.33); ctx.beginPath(); ctx.ellipse(0, 0, 10, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+          ctx.fillRect(qx + 7, qy - 46, 2.6, 40);
+          ctx.textAlign = "left"; ctx.font = `700 30px Georgia, "Times New Roman", serif`;
+          ctx.fillText("= " + bpm, qx + 26, qy);
+        }
+        drawSheetPage(null, -1, lines);
+        ctx.fillStyle = "#555"; ctx.textAlign = "center"; ctx.font = `24px Georgia, "Times New Roman", serif`;
+        ctx.fillText(`${pi + 1} / ${layout.length}`, PAGE_W / 2, PAGE_H - MARGIN + 40);
+        pages.push(cv);
+      });
+    } finally {
+      ({ ctx, sheet, W, kbTop, printing } = saved);
+    }
+    return pages;
+  }
+  // a PDF holding each page as a JPEG picture, written by hand (no library needed)
+  function pdfFromPages(pages) {
+    const enc = new TextEncoder(), chunks = [], offsets = [];
+    let size = 0;
+    const put = x => { const b = typeof x === "string" ? enc.encode(x) : x; chunks.push(b); size += b.length; };
+    const obj = (n, body) => { offsets[n] = size; put(`${n} 0 obj\n`); body(); put("\nendobj\n"); };
+    put("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+    const n = pages.length, kids = pages.map((_, i) => `${3 + i * 3} 0 R`).join(" ");
+    obj(1, () => put("<< /Type /Catalog /Pages 2 0 R >>"));
+    obj(2, () => put(`<< /Type /Pages /Kids [${kids}] /Count ${n} >>`));
+    pages.forEach((cv, i) => {
+      const jpg = atob(cv.toDataURL("image/jpeg", 0.9).split(",")[1]), img = new Uint8Array(jpg.length);
+      for (let k = 0; k < jpg.length; k++) img[k] = jpg.charCodeAt(k);
+      const p = 3 + i * 3, c = p + 1, im = p + 2, draw = "q 612 0 0 792 0 0 cm /Im0 Do Q";
+      obj(p, () => put(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 ${im} 0 R >> >> /Contents ${c} 0 R >>`));
+      obj(c, () => put(`<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`));
+      obj(im, () => { put(`<< /Type /XObject /Subtype /Image /Width ${cv.width} /Height ${cv.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.length} >>\nstream\n`); put(img); put("\nendstream"); });
+    });
+    const xref = size, count = 3 + n * 3;
+    put(`xref\n0 ${count}\n0000000000 65535 f \n`);
+    for (let k = 1; k < count; k++) put(String(offsets[k]).padStart(10, "0") + " 00000 n \n");
+    put(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    return new Blob(chunks, { type: "application/pdf" });
+  }
+  let printed = null;
+  function openPrintView() {
+    const view = $("printView"), box = $("printPages");
+    const render = () => {
+      box.textContent = "";
+      printed = printPages($("printNames").checked);
+      for (const cv of printed) { const img = new Image(); img.src = cv.toDataURL("image/png"); img.alt = "Sheet music page"; box.append(img); }
+      $("printInfo").textContent = `${printed.length} page${printed.length > 1 ? "s" : ""} · ${{ easy: "Easy", medium: "Medium", hard: "Hard", extra: "Extra hard" }[ui.level.value]} version (change it on the start card)`;
+    };
+    $("printNames").onchange = render;
+    $("printClose").onclick = () => { view.hidden = true; box.textContent = ""; printed = null; };
+    $("printPdf").onclick = () => {
+      const url = URL.createObjectURL(pdfFromPages(printed)), a = document.createElement("a");
+      a.href = url; a.download = song.def.title.replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    };
+    $("printNow").onclick = () => window.print();
+    view.hidden = false;
+    setTimeout(render, 30);
+  }
+  $("printBtn").onclick = () => { if (song) openPrintView(); };
+  window.__keyfallPrint = { printPages, pdfFromPages };              // (for automated tests)
 
   function draw() {
     if (!grad) grad = gradients();
@@ -1680,7 +1825,17 @@
         if (s.notes) {
           const x = document.createElement("span"); x.className = "del"; x.textContent = "✕"; x.title = "Remove this song";
           x.onclick = ev => { ev.stopPropagation(); SONGS.splice(SONGS.indexOf(s), 1); saveImported(); refreshOptions(); songChanged(); showHome(); };
-          b.append(x);
+          const rn = document.createElement("span"); rn.className = "ren"; rn.textContent = "✎"; rn.title = "Rename this song";
+          rn.onclick = ev => {
+            ev.stopPropagation();
+            const name = prompt("Name this song:", s.title);
+            if (name === null || !name.trim()) return;
+            const was = s.title;
+            s.title = name.trim().replace(/\s+/g, " ").slice(0, 60);
+            try { const k = "keyfall:stars:", v = localStorage.getItem(k + was); if (v) { localStorage.setItem(k + s.title, v); localStorage.removeItem(k + was); } } catch (e) {}
+            saveImported(); refreshOptions(); songChanged(); showHome();
+          };
+          b.append(x, rn);
         }
         const st = document.createElement("span"); st.className = "st";
         for (let k = 0; k < 3; k++) { const x = document.createElement("i"); x.textContent = "★"; if (k < stars) x.className = "on"; st.append(x); }
