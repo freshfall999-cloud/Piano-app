@@ -1148,76 +1148,217 @@
   }
 
   // ---------- Sheet music view: a still page of music; the note to play lights up and pages turn by themselves ----------
-  const SHARP_STEP = [0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6], FLAT_STEP = [0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6];
+  const WHITE_STEP = { 0: 0, 2: 1, 4: 2, 5: 3, 7: 4, 9: 5, 11: 6 };
   const LETTERS = "CDEFGAB";
+  const MAJOR_P = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  const MINOR_P = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+  const KEY_OF = [0, -5, 2, -3, 4, -1, 6, 1, -4, 3, -2, 5];          // sharps (+) or flats (−) of the major key on each note
+  const SHARP_ORDER = [3, 0, 4, 1, 5, 2, 6], FLAT_ORDER = [6, 2, 5, 1, 4, 0, 3];   // F C G D A E B  /  B E A D G C F
+  const KEY_STEPS = { 1: [38, 35, 39, 36, 33, 37, 34], [-1]: [34, 37, 33, 36, 32, 35, 31] };   // where they sit on the treble staff
+  function keySigOf(notes) {                                 // the key signature that suits the song best (Krumhansl's key profiles)
+    if (notes.length < 12) return 0;
+    const w = new Array(12).fill(0);
+    for (const n of notes) w[n.midi % 12] += Math.min(n.dur, 1.5) + 0.2;
+    const corr = (prof, t) => {
+      let mx = 0, my = 0; for (let i = 0; i < 12; i++) { mx += w[i] / 12; my += prof[i] / 12; }
+      let sxy = 0, sxx = 0, syy = 0;
+      for (let i = 0; i < 12; i++) { const x = w[i] - mx, y = prof[(i - t + 12) % 12] - my; sxy += x * y; sxx += x * x; syy += y * y; }
+      return sxy / Math.sqrt(sxx * syy || 1);
+    };
+    let best = -2, key = 0;
+    for (let t = 0; t < 12; t++) {
+      const a = corr(MAJOR_P, t), m = corr(MINOR_P, t);
+      if (a > best) { best = a; key = KEY_OF[t]; }
+      if (m > best) { best = m; key = KEY_OF[(t + 3) % 12]; }
+    }
+    return key;
+  }
   let sheet = null;                                     // rebuilt when the song, difficulty or screen size changes
+  // Writes the song as real sheet music: notes snapped to a sixteenth-note grid inside each bar, lengths that add up to the
+  // bar, ties across beats and bar lines, rests in the gaps, beams joining eighths and sixteenths, a key signature and
+  // accidentals (with naturals) that follow the rules of printed music.
   function buildSheet(print = null) {
-    const notes = song.notes, beat = song.beat || 0.5;
-    // flats or sharps: whichever this song's black keys suggest (B♭ and E♭ → flats)
+    const notes = song.notes, beat = song.beat || 0.5, recording = !!song.def.notes;
+    // ---- key and spelling ----
+    const key = keySigOf(notes);
     const pcs = new Array(12).fill(0); notes.forEach(n => pcs[n.midi % 12]++);
-    const flats = pcs[10] > pcs[6] + pcs[8] + pcs[1];
-    const groups = [];
-    for (const n of notes) {
-      const stepTab = flats ? FLAT_STEP : SHARP_STEP;
-      const step = (Math.floor(n.midi / 12) - 1) * 7 + stepTab[n.midi % 12];
-      const acc = isBlack(n.midi) ? (flats ? -1 : 1) : 0;
-      const staff = n.hand === "left" ? (n.midi > 64 ? "t" : "b") : (n.midi < 55 ? "b" : "t");
-      let g = groups.find(g => g.staff === staff && Math.abs(g.start - n.start) < 0.05 && g.start > n.start - 1);
-      if (!g) { g = { start: n.start, staff, items: [], dur: 0 }; groups.push(g); }
-      g.items.push({ n, step, acc, name: LETTERS[step % 7] });
-      g.dur = Math.max(g.dur, n.dur);
-    }
-    // a recording's held lengths are blurry (pedal, ringing strings): write each note as lasting until the next one
-    if (song.def.notes) for (const st of ["t", "b"]) {
-      const gs = groups.filter(g => g.staff === st);
-      gs.forEach((g, i) => { if (gs[i + 1]) g.dur = Math.min(beat * 4, gs[i + 1].start - g.start); });
-    }
-    for (const g of groups) {
-      const b = g.dur / beat;
-      Object.assign(g, b >= 3.5 ? { open: true, stem: false, flags: 0, dot: false } : b >= 2.6 ? { open: true, stem: true, flags: 0, dot: true }
-        : b >= 1.75 ? { open: true, stem: true, flags: 0, dot: false } : b >= 1.3 ? { open: false, stem: true, flags: 0, dot: true }
-        : b >= 0.85 ? { open: false, stem: true, flags: 0, dot: false } : b >= 0.65 ? { open: false, stem: true, flags: 1, dot: true }
-        : b >= 0.4 ? { open: false, stem: true, flags: 1, dot: false } : { open: false, stem: true, flags: 2, dot: false });
-      g.items.sort((a, b) => a.step - b.step);
-      const mid = g.staff === "t" ? 34 : 22, avg = g.items.reduce((a, i) => a + i.step, 0) / g.items.length;
-      g.up = avg < mid;
-      // neighbouring notes of a chord sit on opposite sides of the stem
-      for (let i = 1; i < g.items.length; i++) g.items[i].side = g.items[i].step - g.items[i - 1].step === 1 && !g.items[i - 1].side ? 1 : 0;
-    }
-    // ---- page layout: bars packed into lines (systems), lines stacked into pages ----
+    const flats = key < 0 || (key === 0 && pcs[10] > pcs[6] + pcs[8] + pcs[1]);
+    const keyAlter = new Array(7).fill(0);
+    if (key > 0) SHARP_ORDER.slice(0, key).forEach(l => keyAlter[l] = 1);
+    if (key < 0) FLAT_ORDER.slice(0, -key).forEach(l => keyAlter[l] = -1);
+    const spell = midi => {
+      const pc = midi % 12, oct = Math.floor(midi / 12) - 1;
+      if (pc in WHITE_STEP) return { step: oct * 7 + WHITE_STEP[pc], acc: 0 };
+      return flats ? { step: oct * 7 + WHITE_STEP[pc + 1], acc: -1 } : { step: oct * 7 + WHITE_STEP[pc - 1], acc: 1 };
+    };
+    // ---- bars, each split into sixteenths ("ticks"); a bar keeps its own length, so tempo drift in a recording doesn't matter ----
     let bl = (song.bars || []).filter(b => b > 0.01);
     if (!bl.length) for (let t = beat * 4; t < song.end - 0.01; t += beat * 4) bl.push(t);
-    const last = Math.max(song.end, ...groups.map(g => g.start + 0.05));
+    const last = Math.max(song.end, ...notes.map(n => n.start + 0.05));
     const edges = [0, ...bl.filter(b => b < last - 0.01), last];
     const bars = [];
-    for (let i = 0; i < edges.length - 1; i++) bars.push({ t0: edges[i], t1: edges[i + 1], cols: [], num: i + 1 });
-    let bi = 0;
-    for (const g of groups.slice().sort((a, b) => a.start - b.start)) {
-      while (bi < bars.length - 1 && g.start >= bars[bi].t1 - 0.03) bi++;
-      const b = bars[bi];
-      let c = b.cols[b.cols.length - 1];
-      if (!c || g.start - c.t > 0.05) { c = { t: g.start, groups: [] }; b.cols.push(c); }
-      c.groups.push(g); g.col = c;
+    let TT = 0;
+    for (let i = 0; i < edges.length - 1; i++) {
+      const t0 = edges[i], t1 = edges[i + 1], n = Math.max(1, Math.min(12, Math.round((t1 - t0) / beat)));
+      bars.push({ t0, t1, n, ticks: n * 4, T0: TT, cols: [], full: {}, num: i + 1 }); TT += n * 4;
     }
+    const barOfT = T => { let lo = 0, hi = bars.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (bars[m].T0 <= T) lo = m; else hi = m - 1; } return bars[lo]; };
+    const barOfTime = t => { let lo = 0, hi = bars.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (bars[m].t0 <= t) lo = m; else hi = m - 1; } return bars[lo]; };
+    // a recording's timing wobbles a little: snap to eighth notes unless a note is clearly on a sixteenth
+    const toT = t => {
+      const b = barOfTime(t), f = Math.max(0, Math.min(1, (t - b.t0) / (b.t1 - b.t0))) * b.ticks;
+      let r = Math.round(f);
+      if (recording && r % 2 && Math.abs(f - r) > 0.12) r = Math.round(f / 2) * 2;
+      return b.T0 + r;
+    };
+    const timeOf = T => { const b = barOfT(Math.min(T, TT)); return b.t0 + (T - b.T0) / b.ticks * (b.t1 - b.t0); };
+    // ---- chords: notes on one staff that start on the same sixteenth ----
+    const chords = { t: [], b: [] }, byKey = new Map();
+    for (const n of notes) {
+      const staff = n.hand === "left" ? (n.midi > 64 ? "t" : "b") : (n.midi < 55 ? "b" : "t");
+      const T = Math.min(TT - 1, toT(n.start)), k = staff + T;
+      let c = byKey.get(k);
+      if (!c) { c = { T, staff, items: [], all: [], start: n.start, endT: T + 1, pieces: [] }; byKey.set(k, c); chords[staff].push(c); }
+      c.all.push(n); c.start = Math.min(c.start, n.start);
+      c.endT = Math.max(c.endT, toT(n.start + n.dur));
+      if (!c.items.some(i => i.n.midi === n.midi)) c.items.push({ n, ...spell(n.midi), name: "" });
+    }
+    for (const c of byKey.values()) {
+      c.items.sort((a, b) => a.step - b.step);
+      c.items.forEach(it => it.name = LETTERS[((it.step % 7) + 7) % 7]);
+      // neighbouring notes of a chord sit on opposite sides of the stem
+      for (let i = 1; i < c.items.length; i++) c.items[i].side = c.items[i].step - c.items[i - 1].step === 1 && !c.items[i - 1].side ? 1 : 0;
+    }
+    // ---- note values: split a length into the values a musician would write (tied where needed) ----
+    const fits = (v, p, b, rest, loose = false) => {
+      if (loose && !rest && v >= 2) {                     // pop-style: a held note may start off the beat (8th–quarter–8th)
+        if (v === 16) return p === 0;
+        if (v >= 8) return p % 4 === 0;
+        return v === 3 ? p % 4 < 2 : p % 2 === 0;
+      }
+      if (v === 16) return !rest && p === 0;
+      if (v === 12) return !rest && p === 0;
+      if (v === 8) return p % 8 === 0 || (b.n % 2 === 1 && p % 4 === 0);
+      if (v === 6) return !rest && (b.n % 2 === 0 ? p % 8 === 0 : p % 4 === 0);
+      if (v === 4) return p % 4 === 0;
+      if (v === 3) return !rest && p % 4 < 2;
+      if (v === 2) return p % 2 === 0;
+      return true;
+    };
+    const pieces = [];
+    const emit = (a, e, staff, chord, loose = false) => {
+      while (a < e) {
+        const b = barOfT(a), p = a - b.T0, stop = Math.min(e, b.T0 + b.ticks);
+        if (!chord && p === 0 && stop - a === b.ticks) { b.full[staff] = true; a = stop; continue; }   // a whole bar of rest
+        let L = stop - a;
+        while (L > 0) {
+          const v = [16, 12, 8, 6, 4, 3, 2, 1].find(v => v <= L && fits(v, p + (stop - a - L), b, !chord, loose));
+          const T = b.T0 + p + (stop - a - L);
+          const pc = { T, v, staff, rest: !chord, chord, bar: b, p: T - b.T0 };
+          pieces.push(pc); if (chord) chord.pieces.push(pc);
+          L -= v;
+        }
+        a = stop;
+      }
+    };
+    for (const staff of ["t", "b"]) {
+      const cs = chords[staff].sort((x, y) => x.T - y.T);
+      let cur = 0;
+      cs.forEach((c, i) => {
+        const next = i + 1 < cs.length ? cs[i + 1].T : TT;
+        // a recording's held lengths are blurry (pedal, ringing strings): write each note as lasting until the next one
+        let e = recording ? Math.min(next, c.T + 16) : Math.min(next, Math.max(c.endT, c.T + 1));
+        if (cs[i + 1] === undefined && recording) e = Math.min(TT, Math.max(e, c.endT));
+        if (c.T > cur) emit(cur, c.T, staff, null);
+        e = Math.max(c.T + 1, e);
+        if (recording) {                                   // keep a recording easy to read: one plain note value, no ties
+          const b = barOfT(c.T), p = c.T - b.T0, L = Math.min(e, b.T0 + b.ticks) - c.T;
+          e = c.T + [16, 12, 8, 6, 4, 3, 2, 1].find(v => v <= L && fits(v, p, b, false, true));
+        }
+        emit(c.T, e, staff, c, recording);
+        cur = e;
+      });
+      if (cur < TT) emit(cur, TT, staff, null);
+    }
+    pieces.sort((x, y) => x.T - y.T || (x.staff < y.staff ? -1 : 1));
+    for (const c of byKey.values()) c.pieces.forEach((pc, i) => { pc.cont = i > 0; pc.tie = i < c.pieces.length - 1 ? c.pieces[i + 1] : null; pc.prev = i ? c.pieces[i - 1] : null; });
+    for (const pc of pieces) {
+      const v = pc.v;
+      Object.assign(pc, { open: v >= 8, stem: v < 16, dot: v === 12 || v === 6 || v === 3, flags: v === 1 ? 2 : v <= 3 ? 1 : 0,
+        start: pc.cont || pc.rest ? timeOf(pc.T) : pc.chord.start, dur: timeOf(pc.T + v) - timeOf(pc.T) });
+      if (!pc.rest) {
+        const mid = pc.staff === "t" ? 34 : 22, its = pc.chord.items;
+        pc.up = (its[0].step + its[its.length - 1].step) / 2 < mid;
+      }
+    }
+    // ---- accidentals: the key signature holds for the whole song, an accidental for the rest of its bar ----
+    for (const b of bars) for (const staff of ["t", "b"]) {
+      const state = new Map();
+      for (const pc of pieces) {
+        if (pc.bar !== b || pc.staff !== staff || pc.rest) continue;
+        pc.signs = pc.chord.items.map(it => {
+          const now = state.has(it.step) ? state.get(it.step) : keyAlter[((it.step % 7) + 7) % 7];
+          state.set(it.step, it.acc);
+          return pc.cont || now === it.acc ? null : it.acc;
+        });
+      }
+    }
+    // ---- beams: eighths and sixteenths in the same beat are joined ----
+    const beams = [];
+    for (const staff of ["t", "b"]) {
+      let run = [];
+      const close = () => {
+        if (run.length > 1) {
+          const bm = { pieces: run };
+          let lo = 0, cnt = 0; run.forEach(pc => pc.chord.items.forEach(it => { lo += it.step; cnt++; }));
+          bm.up = lo / cnt < (staff === "t" ? 34 : 22);
+          run.forEach(pc => { pc.beam = bm; pc.up = bm.up; });
+          beams.push(bm);
+        }
+        run = [];
+      };
+      for (const pc of pieces) {
+        if (pc.staff !== staff) continue;
+        const prev = run[run.length - 1];
+        const ok = !pc.rest && pc.v < 4;
+        if (!ok) { close(); continue; }
+        if (prev && (prev.bar !== pc.bar || Math.floor(prev.p / 4) !== Math.floor(pc.p / 4) || prev.T + prev.v !== pc.T)) close();
+        run.push(pc);
+      }
+      close();
+    }
+    // ---- columns: everything that starts on the same sixteenth lines up ----
+    for (const pc of pieces) {
+      const b = pc.bar;
+      let c = b.cols[b.cols.length - 1];
+      if (!c || c.T !== pc.T) { c = { T: pc.T, t: timeOf(pc.T), groups: [] }; b.cols.push(c); }
+      c.groups.push(pc); pc.col = c;
+    }
+    // ---- page layout: bars packed into lines (systems), lines stacked into pages ----
+    const timeSig = (() => { const ns = bars.map(b => b.n).filter(n => n > 1).sort((x, y) => x - y); const n = ns.length ? ns[ns.length >> 1] : 4; return n >= 2 && n <= 7 ? n : 4; })();
     let top = 58, bottom = kbTop - 10;
     const h = bottom - top, LINE = 21.5;
     const left = print ? print.left : 10, right = print ? print.right : W - 10;
     function pack(sp) {
-      const clefW = sp * (print ? 7.2 : 5.4), x0 = left + sp * 2 + clefW, lineW = right - sp * 1.2 - x0;
-      // widths: every note gets room for its head and sharp, longer notes get a little more
-      const minW = sp * 3.8, pad = sp * 2.4, w = d => Math.max(minW, sp * (1.6 + 2.6 * Math.sqrt(Math.max(0.25, d))));
+      const clefW = sp * (5.6 + Math.abs(key) * 0.95), tsW = sp * 2.8, x0 = left + sp * 2 + clefW, lineW = right - sp * 1.2 - x0;
+      // widths: every note gets room for its head and accidental, longer notes get a little more
+      const minW = sp * 3.6, pad = sp * 2.2, w = d => Math.max(minW, sp * (1.6 + 2.6 * Math.sqrt(Math.max(0.25, d))));
       for (const b of bars) {
-        b.lead = b.cols.length && (b.cols[0].t - b.t0) / beat > 0.2 ? w((b.cols[0].t - b.t0) / beat) - sp * 1.5 : 0;
-        b.cols.forEach((c, i) => { c.w = w(((i + 1 < b.cols.length ? b.cols[i + 1].t : b.t1) - c.t) / beat); });
+        b.lead = b.cols.length && b.cols[0].T > b.T0 ? w((b.cols[0].T - b.T0) / 4) - sp * 1.5 : 0;
+        b.cols.forEach((c, i) => {
+          c.w = w(((i + 1 < b.cols.length ? b.cols[i + 1].T : b.T0 + b.ticks) - c.T) / 4);
+          if (c.groups.some(g => g.signs && g.signs.some(x => x !== null))) c.w += sp * 0.9;   // room for a sharp/flat/natural
+        });
         b.w = b.cols.length ? pad + b.lead + b.cols.reduce((a, c) => a + c.w, 0) : sp * 8;
       }
       const systems = [];
       let cur = null;
       for (const b of bars) {
-        if (!cur || (cur.w + b.w > lineW && cur.bars.length)) { cur = { bars: [], w: 0 }; systems.push(cur); }
+        const room = lineW - (systems.length === 1 && cur === systems[0] ? tsW : 0);
+        if (!cur || (cur.w + b.w > room && cur.bars.length)) { cur = { bars: [], w: 0 }; systems.push(cur); }
         cur.bars.push(b); cur.w += b.w;
       }
-      return { sp, clefW, x0, lineW, pad, systems };
+      return { sp, clefW, tsW, x0, lineW, pad, systems };
     }
     // size: the whole song on one page if it can be read there, otherwise as many lines per page as stay readable
     let pick = print ? { P: pack(print.sp), rows: 1 } : null, most = null;
@@ -1234,15 +1375,16 @@
       if (P.systems.length * LINE * sz <= h - 8) { pick = { P, rows: P.systems.length }; break; }
     }
     pick.P = pack(pick.P.sp);                             // (the trial sizes above left their widths on the bars)
-    const { sp, clefW, x0, lineW, pad, systems } = pick.P, rows = pick.rows;
+    const { sp, clefW, tsW, x0, lineW, pad, systems } = pick.P, rows = pick.rows;
     systems.forEach((s, i) => {
-      const k = i < systems.length - 1 || s.w > lineW * 0.65 ? lineW / s.w : Math.min(1.35, lineW / s.w);
-      let x = x0;
+      const start = x0 + (i === 0 ? tsW : 0), width = lineW - (i === 0 ? tsW : 0);
+      const k = i < systems.length - 1 || s.w > width * 0.65 ? width / s.w : Math.min(1.35, width / s.w);
+      let x = start;
       s.anchors = [];
       for (const b of s.bars) {
-        b.x = x; let cx = x + (pad + b.lead) * k;
+        b.x = x; b.sys = i; let cx = x + (pad + b.lead) * k;
         s.anchors.push({ t: b.t0, x: x + sp * 0.9 });
-        for (const c of b.cols) { c.x = cx; s.anchors.push({ t: c.t, x: cx }); cx += c.w * k; }
+        for (const c of b.cols) { c.x = cx + (c.w > 0 && c.groups.some(g => g.signs && g.signs.some(x => x !== null)) ? sp * 0.9 * k : 0); c.sys = i; s.anchors.push({ t: c.t, x: c.x }); cx += c.w * k; }
         x += b.w * k; b.end = x;
       }
       s.t0 = s.bars[0].t0; s.t1 = s.bars[s.bars.length - 1].t1; s.end = x;
@@ -1251,7 +1393,7 @@
       s.trebleTop = top + 4 + row * slot + (slot - 14 * sp) / 2 + sp * 0.4;
       s.trebleBottom = s.trebleTop + 4 * sp; s.bassTop = s.trebleBottom + 6 * sp; s.bassBottom = s.bassTop + 4 * sp;
     });
-    sheet = { groups, flats, sp, top, bottom, left, right, clefW, systems, rows, pages: Math.ceil(systems.length / rows),
+    sheet = { groups: pieces, beams, flats, key, timeSig, sp, top, bottom, left, right, clefW, systems, rows, pages: Math.ceil(systems.length / rows),
       page: 0, from: 0, turnAt: -1e9, W, kbTop };
   }
   function sheetSystemAt(t) {
@@ -1321,26 +1463,64 @@
       ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = INK;
       ctx.font = clefFont(5.6); ctx.fillText("\u{1D11E}", lx + sp * 2.4, s.trebleBottom + sp * 0.9);
       ctx.font = clefFont(3.9); ctx.fillText("\u{1D122}", lx + sp * 2.4, s.bassBottom - sp * 0.75);
+      // key signature on every line, time signature on the first
+      const ks = Math.sign(S.key);
+      ctx.font = `700 ${Math.round(sp * 2.1)}px system-ui, serif`; ctx.textBaseline = "middle";
+      for (let i = 0; i < Math.abs(S.key); i++) {
+        const x = lx + sp * (5.0 + i * 0.95), st = KEY_STEPS[ks][i];
+        ctx.fillText(ks > 0 ? "♯" : "♭", x, yOf("t", st) + (ks > 0 ? 0 : -sp * 0.3));
+        ctx.fillText(ks > 0 ? "♯" : "♭", x, yOf("b", st - 14) + (ks > 0 ? 0 : -sp * 0.3));
+      }
+      ctx.textBaseline = "alphabetic";
+      if (si === 0) {
+        ctx.font = `700 ${Math.round(sp * 2.85)}px Georgia, "Times New Roman", serif`;
+        const x = lx + S.clefW + sp * 0.6;
+        for (const y of [s.trebleTop, s.bassTop]) { ctx.fillText(String(S.timeSig), x, y + sp * 2); ctx.fillText("4", x, y + sp * 4); }
+      }
       // bar number above the line
       ctx.fillStyle = "rgba(38,42,54,.5)"; ctx.font = `italic 600 ${Math.round(Math.max(9, sp * 1.05))}px system-ui, sans-serif`;
       ctx.textAlign = "left"; ctx.fillText(String(s.bars[0].num), lx, s.trebleTop - sp * 1.2);
       // bar lines (a double bar at the very end)
-      if (printing) printExtras(s, si, lx, yOf);
+      // a bar with nothing for one hand gets a whole rest
+      ctx.fillStyle = INK;
+      for (const b of s.bars) for (const st of ["t", "b"]) if (b.full[st]) {
+        const mid = (st === "t" ? s.trebleBottom : s.bassBottom) - 2 * sp;
+        ctx.fillRect((b.x + b.end) / 2 - sp * 0.6, mid - sp, sp * 1.2, sp * 0.5);
+      }
       ctx.fillStyle = printing ? "#000" : "rgba(38,42,54,.85)";
       const bw = printing ? Math.max(1.4, sp * 0.12) : 1.4;
       for (const b of s.bars) ctx.fillRect(Math.round(b.end) - bw, s.trebleTop, bw, s.bassBottom - s.trebleTop);
       if (si === lastSys) { ctx.fillRect(Math.round(s.end) - 4.5, s.trebleTop, 4.5, s.bassBottom - s.trebleTop); ctx.fillRect(Math.round(s.end) - 8.5, s.trebleTop, 1.4, s.bassBottom - s.trebleTop); }
       // sustain pedal: "Ped." where it goes down, a line while it's held, a tick where it lifts
       if (song.pedal && song.pedal.length) {
-        const py = s.bassBottom + sp * 2.7;
+        let lowest = 18;                                   // below the lowest note of the line
+        for (const b of s.bars) for (const c of b.cols) for (const g of c.groups) if (!g.rest && g.staff === "b") lowest = Math.min(lowest, g.chord.items[0].step);
+        const py = Math.min(s.bassBottom + sp * (printing ? 4.4 : 3.8), Math.max(s.bassBottom + sp * 2.7, yOf("b", lowest) + sp * 1.9));
         ctx.strokeStyle = "rgba(38,42,54,.7)"; ctx.fillStyle = "rgba(38,42,54,.75)"; ctx.lineWidth = Math.max(1, sp * 0.12);
         ctx.font = `italic 700 ${Math.round(sp * 1.05)}px Georgia, serif`; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+        // a quick change of pedal is a notch in the line ("lift and press again"), not a new "Ped."
+        const ped = [];                                     // (changes squeezed closer than a note's width merge into one)
         for (const [a, b] of song.pedal) {
-          if (b <= s.t0 || a >= s.t1) continue;
-          let x0 = sheetX(s, Math.max(a, s.t0)), x1 = sheetX(s, Math.min(b, s.t1));
-          if (a >= s.t0) { ctx.fillText("Ped.", x0 - sp * 0.4, py + sp * 0.4); x0 += sp * 2.6; }
-          if (x1 > x0) { ctx.beginPath(); ctx.moveTo(x0, py); ctx.lineTo(x1, py); if (b <= s.t1) ctx.lineTo(x1, py - sp * 0.9); ctx.stroke(); }
+          if (b <= s.t0 - 1 || a >= s.t1 + 1) continue;
+          const l = ped[ped.length - 1];
+          if (l && a - l[1] < 0.15 && sheetX(s, a) - sheetX(s, l[2]) < sp * 1.8) l[1] = b; else ped.push([a, b, a]);
         }
+        let textEnd = -1e9, notchEnd = null;
+        ped.forEach(([a, b], i) => {
+          if (b <= s.t0 || a >= s.t1) return;
+          const again = i > 0 && a - ped[i - 1][1] < 0.15, next = ped[i + 1] && ped[i + 1][0] - b < 0.15;
+          let x0 = sheetX(s, Math.max(a, s.t0)), x1 = sheetX(s, Math.min(b, s.t1));
+          if (a >= s.t0 && again) x0 = notchEnd !== null ? notchEnd : x0 + sp * 0.45;
+          else if (a >= s.t0 && x0 - sp * 0.4 >= textEnd) { ctx.fillText("Ped.", x0 - sp * 0.4, py + sp * 0.4); x0 += sp * 2.6; textEnd = x0; }
+          const end = b <= s.t1;
+          if (end && next && b < s.t1 - 0.01) x1 -= sp * 0.45;
+          if (x1 > x0) {
+            ctx.beginPath(); ctx.moveTo(x0, py); ctx.lineTo(x1, py);
+            if (end && next && b < s.t1 - 0.01) { ctx.lineTo(x1 + sp * 0.45, py - sp * 0.9); ctx.lineTo(x1 + sp * 0.9, py); notchEnd = x1 + sp * 0.9; }
+            else if (end) ctx.lineTo(x1, py - sp * 0.9);
+            ctx.stroke();
+          }
+        });
       }
       // the "you are here" marker on the line being played
       if (!printing && si === curSys && state !== "idle" && time >= s.t0 - 2) {
@@ -1351,15 +1531,82 @@
         ctx.shadowColor = "#39b6ff"; ctx.shadowBlur = 8; ctx.fillStyle = "rgba(31,134,201,.8)";
         ctx.fillRect(x - 1, y0, 2, hh); ctx.shadowBlur = 0;
       }
-      // notes
+      // beams: where each beam runs (a straight line over the stems, never shorter than a short stem)
+      const beamOf = new Map();
+      for (const bm of S.beams) {
+        const ps = bm.pieces;
+        if (ps[0].col.sys !== si) continue;
+        const dir = bm.up ? -1 : 1;
+        const pts = ps.map(pc => {
+          const its = pc.chord.items, near = bm.up ? its[its.length - 1].step : its[0].step, far = bm.up ? its[0].step : its[its.length - 1].step;
+          return { x: pc.col.x + (bm.up ? rx * 0.92 : -rx * 0.92), yn: yOf(pc.staff, near), yf: yOf(pc.staff, far) };
+        });
+        const f = pts[0], l = pts[pts.length - 1], span = Math.max(1, l.x - f.x);
+        let slope = ((l.yn + dir * sp * 3.3) - (f.yn + dir * sp * 3.3)) / span;
+        slope = Math.max(-sp * 1.2 / span, Math.min(sp * 1.2 / span, slope));
+        const need = ps.some(pc => pc.v === 1) ? sp * 3.1 : sp * 2.7;
+        let y0 = f.yn + dir * sp * 3.3;
+        for (const q of pts) {                              // push the beam out until every stem is long enough
+          const y = y0 + slope * (q.x - f.x);
+          if (dir < 0 && y > q.yn - need) y0 -= y - (q.yn - need);
+          if (dir > 0 && y < q.yn + need) y0 += (q.yn + need) - y;
+        }
+        const geo = { at: x => y0 + slope * (x - f.x), dir, pts };
+        ps.forEach((pc, i) => beamOf.set(pc, { geo, i }));
+        // the beams themselves
+        const th = sp * 0.48, col = printing ? INK : ps.every(pc => pc.chord.all.every(n => !isUser(n))) && mode() !== "listen" ? "#9aa0ae" : INK;
+        ctx.fillStyle = col;
+        const bar = (x1, x2, lvl) => {
+          const o = -dir * lvl * sp * 0.78;
+          ctx.beginPath(); ctx.moveTo(x1, geo.at(x1) + o); ctx.lineTo(x2, geo.at(x2) + o);
+          ctx.lineTo(x2, geo.at(x2) + o - dir * th); ctx.lineTo(x1, geo.at(x1) + o - dir * th); ctx.closePath(); ctx.fill();
+        };
+        bar(f.x - 0.6, l.x + 0.6, 0);
+        ps.forEach((pc, i) => {
+          if (pc.v !== 1) return;
+          const nx = ps[i + 1], pv = ps[i - 1];
+          if (nx && nx.v === 1) bar(pts[i].x - 0.6, pts[i + 1].x + 0.6, 1);
+          else if (!(pv && pv.v === 1)) {                   // a lone sixteenth: a short stub toward its neighbour
+            const toRight = !!nx && !(pv && pv.v === 3);
+            bar(toRight ? pts[i].x : pts[i].x - sp * 1.2, toRight ? pts[i].x + sp * 1.2 : pts[i].x, 1);
+          }
+        });
+      }
+      // notes and rests
       for (const b of s.bars) for (const c of b.cols) for (const g of c.groups) {
         const x = c.x;
-        const bottomLine = g.staff === "t" ? 30 : 18;
-        const isTarget = g.items.some(i => target.has(i.n));
-        const sounding = !printing && mode() !== "practice" && state !== "idle" && g.start <= time + 0.03 && time < g.start + Math.max(0.25, g.dur * 0.9);
+        const mid = (g.staff === "t" ? s.trebleBottom : s.bassBottom) - 2 * sp;
+        if (g.rest) {
+          ctx.fillStyle = ctx.strokeStyle = INK; ctx.globalAlpha = !printing && g.start < time - 0.05 && state !== "idle" ? 0.6 : 1;
+          if (g.v >= 8) ctx.fillRect(x - sp * 0.6, mid - sp * 0.5, sp * 1.2, sp * 0.5);      // half rest: sits on the middle line
+          else {
+            ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.beginPath();
+            const P = (dx, dy) => [x + dx * sp, mid + dy * sp];
+            if (g.v >= 4) {                                                              // quarter rest: the zigzag
+              ctx.lineWidth = sp * 0.3;
+              ctx.moveTo(...P(-0.35, -1.5)); ctx.lineTo(...P(0.35, -0.65)); ctx.lineTo(...P(-0.2, 0.1)); ctx.lineTo(...P(0.35, 0.85));
+              ctx.quadraticCurveTo(...P(-0.55, 0.55), ...P(-0.05, 1.5)); ctx.stroke();
+            } else {                                                                     // eighth / sixteenth rest: dots and a slanted stroke
+              ctx.lineWidth = sp * 0.16;
+              ctx.moveTo(...P(0.5, -0.75)); ctx.lineTo(...P(-0.05, g.v === 1 ? 1.5 : 1.0)); ctx.stroke();
+              const hooks = g.v === 1 ? [-0.75, 0.25] : [-0.75];
+              for (const hy of hooks) {
+                const sx = 0.5 - (hy + 0.75) * 0.34;
+                ctx.beginPath(); ctx.moveTo(...P(sx - 0.9, hy + 0.15)); ctx.quadraticCurveTo(...P(sx - 0.45, hy + 0.45), ...P(sx, hy)); ctx.stroke();
+                ctx.beginPath(); ctx.arc(...P(sx - 0.85, hy + 0.1), sp * 0.26, 0, Math.PI * 2); ctx.fill();
+              }
+            }
+            ctx.lineCap = "butt"; ctx.lineJoin = "miter";
+          }
+          ctx.globalAlpha = 1;
+          continue;
+        }
+        const ch = g.chord, its = ch.items, bottomLine = g.staff === "t" ? 30 : 18;
+        const isTarget = !g.cont && ch.all.some(n => target.has(n));
+        const sounding = !printing && !g.cont && mode() !== "practice" && state !== "idle" && g.start <= time + 0.03 && time < g.start + Math.max(0.25, g.dur * 0.9);
         const past = !printing && !isTarget && !sounding && g.start < time - 0.05 && state !== "idle";
-        ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.globalAlpha = past ? 0.6 : 1;
-        const lo = g.items[0].step, hi = g.items[g.items.length - 1].step;
+        ctx.strokeStyle = INK; ctx.lineWidth = printing ? Math.max(1.2, sp * 0.1) : 1.2; ctx.globalAlpha = past ? 0.6 : 1;
+        const lo = its[0].step, hi = its[its.length - 1].step;
         for (let st = bottomLine - 2; st >= lo; st -= 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
         for (let st = bottomLine + 10; st <= hi; st += 2) { const y = yOf(g.staff, st); ctx.beginPath(); ctx.moveTo(x - rx * 1.7, y); ctx.lineTo(x + rx * 1.7, y); ctx.stroke(); }
         if (isTarget || sounding) {
@@ -1367,12 +1614,12 @@
           ctx.fillStyle = `rgba(57,182,255,${0.16 + 0.12 * pulse})`;
           rrect(x - rx * 2.4, yOf(g.staff, hi) - sp * 1.4, rx * 4.8, yOf(g.staff, lo) - yOf(g.staff, hi) + sp * 2.8, sp); ctx.fill();
         }
-        let stemColor = INK;
-        for (const it of g.items) {
-          const n = it.n, user = isUser(n), lit = target.has(n) || (sounding && (user || mode() === "listen") && n.state !== "hit" && n.state !== "miss");
-          const col = printing ? INK : n.state === "miss" ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : lit ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
+        let stemColor = INK, signCol = 0, lastSign = 1e9;
+        for (let ii = its.length - 1; ii >= 0; ii--) {
+          const it = its[ii], n = it.n, user = isUser(n), lit = isTarget && target.has(n) || (sounding && (user || mode() === "listen") && n.state !== "hit" && n.state !== "miss");
+          const col = printing ? INK : n.state === "miss" && !g.cont ? "#d43c4f" : n.state === "hit" && user ? "#2e9d5f" : lit ? (n.hand === "left" ? "#d9761a" : "#1f86c9")
             : !user && mode() !== "listen" ? "#9aa0ae" : INK;
-          if (it === g.items[g.items.length - 1] || lit) stemColor = col;
+          if (ii === its.length - 1 || lit) stemColor = col;
           const hx = x + (it.side ? (g.up ? rx * 1.9 : -rx * 1.9) : 0), y = yOf(g.staff, it.step);
           if (lit) { ctx.shadowColor = col; ctx.shadowBlur = 12; }
           ctx.fillStyle = ctx.strokeStyle = col;
@@ -1383,24 +1630,44 @@
             ctx.font = `800 ${Math.round(sp * 0.92)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
             ctx.fillStyle = g.open ? col : "#ffffff"; ctx.fillText(it.name, hx, y + 0.5); ctx.textBaseline = "alphabetic";
           }
-          if (it.acc) {
+          const sign = g.signs && g.signs[ii];
+          if (sign !== null && sign !== undefined) {           // sharp, flat or natural; stacked ones step to the left
+            signCol = lastSign - it.step < 6 ? signCol + 1 : 0; lastSign = it.step;
+            const sx = x - rx * 2.3 - (its.some(i => i.side) && !g.up ? rx * 1.9 : 0) - signCol * sp * 1.05;
             ctx.fillStyle = col; ctx.font = `700 ${Math.round(sp * 2.1)}px system-ui, serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            ctx.fillText(it.acc > 0 ? "♯" : "♭", hx - rx * 2.3, y + (it.acc > 0 ? 0 : -sp * 0.3)); ctx.textBaseline = "alphabetic";
+            ctx.fillText(sign > 0 ? "♯" : sign < 0 ? "♭" : "♮", sx, y + (sign < 0 ? -sp * 0.3 : 0)); ctx.textBaseline = "alphabetic";
           }
-          if (g.dot) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(hx + rx * 1.8, y - ((it.step - bottomLine) % 2 === 0 ? sp * 0.25 : 0), sp * 0.17, 0, Math.PI * 2); ctx.fill(); }
+          if (g.dot) {
+            const dx = x + rx * (its.some(i => i.side) && g.up ? 3.7 : 1.8);
+            ctx.fillStyle = col; ctx.beginPath(); ctx.arc(dx + sp * 0.15, y - ((it.step - bottomLine) % 2 === 0 ? sp * 0.5 : 0), sp * 0.17, 0, Math.PI * 2); ctx.fill();
+          }
+          // ties: a curve to the same note in the next piece (or to the end of the line, picked up again on the next one)
+          const tieDir = its.length > 1 ? (ii >= its.length / 2 ? -1 : 1) : (g.up ? 1 : -1);
+          const tie = (x1, x2) => {
+            const y1 = y + tieDir * sp * 0.45, hgt = tieDir * Math.min(sp * 1.1, sp * 0.4 + (x2 - x1) * 0.08);
+            ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x1, y1);
+            ctx.quadraticCurveTo((x1 + x2) / 2, y1 + hgt * 1.25, x2, y1);
+            ctx.quadraticCurveTo((x1 + x2) / 2, y1 + hgt * 1.25 - tieDir * sp * 0.28, x1, y1); ctx.fill();
+          };
+          if (g.tie) tie(hx + rx * 1.15 + (g.dot ? sp * 0.7 : 0), g.tie.col.sys === c.sys ? g.tie.col.x - rx * 1.15 : s.end - sp * 0.4);
+          if (g.cont && g.prev.col.sys !== c.sys) tie(lx + S.clefW + sp * 0.6, hx - rx * 1.15);
         }
         if (g.stem) {
+          const bm = beamOf.get(g);
           const sx = g.up ? x + rx * 0.92 : x - rx * 0.92;
           const yLo = yOf(g.staff, lo), yHi = yOf(g.staff, hi);
-          const y0 = g.up ? yLo : yHi, y1 = g.up ? yHi - sp * 3.4 : yLo + sp * 3.4;
+          const y0 = g.up ? yLo : yHi;
+          const yEnd = bm ? bm.geo.at(sx) : g.up ? Math.min(yHi - sp * 3.4, mid) : Math.max(yLo + sp * 3.4, mid);
           ctx.strokeStyle = stemColor; ctx.lineWidth = Math.max(1.2, sp * 0.12);
-          ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, y1); ctx.stroke();
-          ctx.lineWidth = Math.max(1.5, sp * 0.22);
-          for (let f = 0; f < g.flags; f++) {
-            const fy = y1 + (g.up ? 1 : -1) * f * sp * 0.8;
-            ctx.beginPath(); ctx.moveTo(sx, fy);
-            ctx.bezierCurveTo(sx + sp * 0.2, fy + (g.up ? 1 : -1) * sp * 0.9, sx + sp * 1.3, fy + (g.up ? 1 : -1) * sp * 1.2, sx + sp * 0.9, fy + (g.up ? 1 : -1) * sp * 2.2);
-            ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, yEnd); ctx.stroke();
+          if (!bm) {
+            ctx.lineWidth = Math.max(1.5, sp * 0.22);
+            for (let f = 0; f < g.flags; f++) {
+              const fy = yEnd + (g.up ? 1 : -1) * f * sp * 0.8;
+              ctx.beginPath(); ctx.moveTo(sx, fy);
+              ctx.bezierCurveTo(sx + sp * 0.2, fy + (g.up ? 1 : -1) * sp * 0.9, sx + sp * 1.3, fy + (g.up ? 1 : -1) * sp * 1.2, sx + sp * 0.9, fy + (g.up ? 1 : -1) * sp * 2.2);
+              ctx.stroke();
+            }
           }
         }
         ctx.globalAlpha = 1;
@@ -1410,51 +1677,6 @@
 
   // ---------- Printable sheet music: letter-size pages, black on white, as a PDF to download or to print ----------
   const PAGE_W = 1700, PAGE_H = 2200, MARGIN = 130, PSP = 13;       // 8.5 × 11 in at 200 dots an inch; staff 6.6 mm tall
-  function timeSignature() {
-    const beat = song.beat || 0.5, b = song.bars || [];
-    const lens = b.map((t, i) => (i ? t - b[i - 1] : t) / beat).filter(x => x > 0.5).sort((x, y) => x - y);
-    const n = lens.length ? Math.round(lens[lens.length >> 1]) : 4;
-    return n >= 2 && n <= 7 ? n : 4;
-  }
-  // rests where a staff is silent, and the time signature on the first line (only on paper)
-  function printExtras(s, si, lx, yOf) {
-    const sp = sheet.sp, beat = song.beat || 0.5;
-    ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
-    if (si === 0) {
-      ctx.font = `700 ${Math.round(sp * 2.85)}px Georgia, "Times New Roman", serif`;
-      const x = lx + sp * 5.7, n = String(printing.timeSig);
-      for (const y of [s.trebleTop, s.bassTop]) { ctx.fillText(n, x, y + sp * 2); ctx.fillText("4", x, y + sp * 4); }
-    }
-    const rest = (staff, x, beats) => {
-      const mid = staff === "t" ? s.trebleBottom - 2 * sp : s.bassBottom - 2 * sp;
-      ctx.fillStyle = ctx.strokeStyle = "#000";
-      if (beats >= 4) { ctx.fillRect(x - sp * 0.6, mid - sp, sp * 1.2, sp * 0.5); return; }          // whole rest: hangs from the 4th line
-      if (beats >= 2) { ctx.fillRect(x - sp * 0.6, mid - sp * 0.5, sp * 1.2, sp * 0.5); return; }    // half rest: sits on the middle line
-      ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.beginPath();
-      const P = (dx, dy) => [x + dx * sp, mid + dy * sp];
-      if (beats >= 1) {                                                                            // quarter rest: the zigzag
-        ctx.lineWidth = sp * 0.3;
-        ctx.moveTo(...P(-0.35, -1.5)); ctx.lineTo(...P(0.35, -0.65)); ctx.lineTo(...P(-0.2, 0.1)); ctx.lineTo(...P(0.35, 0.85));
-        ctx.quadraticCurveTo(...P(-0.55, 0.55), ...P(-0.05, 1.5)); ctx.stroke();
-      } else {                                                                                     // eighth rest: a dot and a slanted stroke
-        ctx.lineWidth = sp * 0.16;
-        ctx.moveTo(...P(-0.4, -0.55)); ctx.quadraticCurveTo(...P(0.05, -0.15), ...P(0.5, -0.75)); ctx.lineTo(...P(-0.05, 1.0)); ctx.stroke();
-        ctx.beginPath(); ctx.arc(...P(-0.35, -0.6), sp * 0.27, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.lineCap = "butt"; ctx.lineJoin = "miter";
-    };
-    for (const b of s.bars) for (const staff of ["t", "b"]) {
-      const gs = b.cols.flatMap(c => c.groups).filter(g => g.staff === staff).sort((x, y) => x.start - y.start);
-      if (!gs.length) { rest(staff, (b.x + b.end) / 2, 4); continue; }
-      let cur = b.t0;
-      const fill = (from, to) => {
-        let left = Math.round((to - from) / beat * 2) / 2, t = from;
-        while (left >= 0.5) { const piece = left >= 2 && Math.abs(((t - b.t0) / beat) % 2) < 0.01 ? 2 : left >= 1 ? 1 : 0.5; rest(staff, sheetX(s, t) + sp * 0.3, piece); t += piece * beat; left -= piece; }
-      };
-      for (const g of gs) { if ((g.start - cur) / beat >= 0.45) fill(cur, g.start); cur = Math.max(cur, g.start + g.dur); }
-      if ((b.t1 - cur) / beat >= 0.45) fill(cur, b.t1);
-    }
-  }
   function printPages(labels) {
     const saved = { ctx, sheet, W, kbTop, printing };
     const pages = [];
@@ -1471,7 +1693,7 @@
         sys.trebleTop = y + 3.6 * sp; sys.trebleBottom = sys.trebleTop + 4 * sp; sys.bassTop = sys.trebleBottom + 6 * sp; sys.bassBottom = sys.bassTop + 4 * sp;
         layout[page].push(i); y += slot;
       });
-      printing = { labels, timeSig: timeSignature() };
+      printing = { labels };
       const bpm = Math.round(60 / (song.beat || 0.5));
       layout.forEach((lines, pi) => {
         const cv = document.createElement("canvas"); cv.width = PAGE_W; cv.height = PAGE_H;
