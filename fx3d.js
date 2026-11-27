@@ -1,9 +1,10 @@
 // 3D hit effects, drawn with three.js (MIT) on a see-through layer over the keyboard:
-// sparks that burst out of the key toward you, a ring of light rippling across the keys and a quick glow.
+// sparks that burst out of the key toward you, glitter that drifts up like glowing smoke while a key sounds,
+// a ring of light rippling across the keys and a quick glow.
 // It only draws while something is moving, so it costs nothing when you aren't playing.
 import * as THREE from "./vendor/three/three.module.min.js";
 
-const MAX = 1600;                                         // sparks alive at once
+const MAX = 3200;                                         // sparks and glitter alive at once
 
 export function createFx(host) {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
@@ -28,6 +29,7 @@ export function createFx(host) {
   // ---- sparks: one point cloud, soft round dots that grow as they fly toward you ----
   const pos = new Float32Array(MAX * 3), col = new Float32Array(MAX * 3), alpha = new Float32Array(MAX), size = new Float32Array(MAX);
   const vel = new Float32Array(MAX * 3), born = new Float32Array(MAX), life = new Float32Array(MAX).fill(0), base = new Float32Array(MAX);
+  const glitter = new Uint8Array(MAX);                     // 1: glitter (floats up, wobbles, twinkles); 0: a spark (flies out and falls)
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute("color", new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
@@ -101,19 +103,20 @@ export function createFx(host) {
   function burst(x, y, color, big, keyW = 20) {
     if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
-    const n = big ? 90 : 50;
-    for (let i = 0; i < n; i++) {
+    const n = big ? 70 : 40;
+    for (let i = 0; i < n; i++) {                            // sparks
       const k = next; next = (next + 1) % MAX;
       const a = (Math.random() - 0.5) * 2.2, up = 220 + Math.random() * (big ? 520 : 360);
       pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.6; pos[k * 3 + 1] = wy; pos[k * 3 + 2] = 0;
       vel[k * 3] = Math.sin(a) * up * 0.55;
       vel[k * 3 + 1] = Math.cos(a) * up;
       vel[k * 3 + 2] = (0.2 + Math.random()) * (big ? 520 : 380);   // out of the screen, toward you
-      const white = Math.random() < 0.3;
+      const white = Math.random() < 0.35;
       col[k * 3] = white ? 1 : c.r; col[k * 3 + 1] = white ? 1 : c.g; col[k * 3 + 2] = white ? 1 : c.b;
-      born[k] = now; life[k] = 0.55 + Math.random() * (big ? 0.75 : 0.5);
-      base[k] = 14 + Math.random() * (big ? 20 : 12);
+      born[k] = now; life[k] = 0.5 + Math.random() * (big ? 0.7 : 0.45);
+      base[k] = 9 + Math.random() * (big ? 16 : 10); glitter[k] = 0;
     }
+    sprinkle(wx, wy, c, keyW, big ? 90 : 50, 1.3);
     // a ring of light spreading over the keys (lying flat, seen at an angle)
     const ring = piece("ring");
     ring.mesh.material.color.copy(c);
@@ -129,21 +132,52 @@ export function createFx(host) {
     kick();
   }
 
+  // glitter: tiny lights that float up from the key and drift and twinkle as they fade
+  function sprinkle(wx, wy, c, keyW, n, speed = 1) {
+    const now = performance.now() / 1000;
+    for (let i = 0; i < n; i++) {
+      const k = next; next = (next + 1) % MAX;
+      pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.9; pos[k * 3 + 1] = wy + Math.random() * 6; pos[k * 3 + 2] = Math.random() * 40;
+      vel[k * 3] = (Math.random() - 0.5) * 60 * speed;
+      vel[k * 3 + 1] = (50 + Math.random() * 190) * speed;
+      vel[k * 3 + 2] = Math.random() * 90 * speed;
+      const white = Math.random() < 0.45, f = 0.75 + Math.random() * 0.25;
+      col[k * 3] = white ? 1 : c.r * f; col[k * 3 + 1] = white ? 0.92 : c.g * f; col[k * 3 + 2] = white ? 0.94 : c.b * f;
+      born[k] = now; life[k] = 0.9 + Math.random() * 1.3;
+      base[k] = 5 + Math.random() * 8; glitter[k] = 1;
+    }
+  }
+  // a key that is sounding (held, or played by the app): a steady trickle of glitter (rate: per second)
+  function emit(x, y, color, keyW, dt, rate = 80) {
+    if (lost) return;
+    const want = rate * dt, n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+    if (!n) return;
+    const [wx, wy] = toWorld(x, y);
+    sprinkle(wx, wy, new THREE.Color(color), keyW, n);
+    kick();
+  }
+
   let raf = 0, last = 0;
   function kick() { if (!raf) { last = performance.now() / 1000; raf = requestAnimationFrame(frame); } }
   function frame() {
     raf = 0;
     const now = performance.now() / 1000, dt = Math.min(0.05, now - last); last = now;
     let alive = 0;
-    const drag = Math.pow(0.35, dt);
+    const drag = Math.pow(0.35, dt), float = Math.pow(0.75, dt);
     for (let k = 0; k < MAX; k++) {
       if (!life[k]) { alpha[k] = 0; size[k] = 0; continue; }
       const age = (now - born[k]) / life[k];
       if (age >= 1) { life[k] = 0; alpha[k] = 0; size[k] = 0; continue; }
       alive++;
-      vel[k * 3] *= drag; vel[k * 3 + 2] *= drag; vel[k * 3 + 1] = vel[k * 3 + 1] * drag - 900 * dt;   // air and gravity
+      if (glitter[k]) {                                    // rises gently and swirls, like sparkling smoke
+        vel[k * 3] = vel[k * 3] * float + Math.sin(now * 2.1 + k * 1.7 + pos[k * 3 + 1] * 0.015) * 160 * dt;
+        vel[k * 3 + 1] = vel[k * 3 + 1] * float + 40 * dt; vel[k * 3 + 2] *= float;
+      } else {
+        vel[k * 3] *= drag; vel[k * 3 + 2] *= drag; vel[k * 3 + 1] = vel[k * 3 + 1] * drag - 900 * dt;   // air and gravity
+      }
       pos[k * 3] += vel[k * 3] * dt; pos[k * 3 + 1] += vel[k * 3 + 1] * dt; pos[k * 3 + 2] += vel[k * 3 + 2] * dt;
       alpha[k] = Math.pow(1 - age, 1.3) * Math.min(1, age * 12);
+      if (glitter[k]) alpha[k] *= 0.5 + 0.5 * Math.sin(now * (9 + (k % 7) * 2) + k);          // twinkle
       size[k] = base[k] * (1 - age * 0.5);
     }
     for (const p of pool) {
@@ -152,7 +186,7 @@ export function createFx(host) {
       if (a >= 1) { p.mesh.visible = false; continue; }
       alive++;
       const e = 1 - Math.pow(1 - a, 3);
-      if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * 0.9; }
+      if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * 0.6; }
       else { const r = p.r * (0.6 + 0.6 * e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a); }
     }
     for (const n of ["position", "color", "alpha", "size"]) geo.attributes[n].needsUpdate = true;
@@ -167,5 +201,5 @@ export function createFx(host) {
     renderer.dispose(); renderer.forceContextLoss(); canvas.remove();   // (hand the graphics memory back right away)
   }
 
-  return { burst, resize, dispose };
+  return { burst, emit, resize, dispose };
 }
