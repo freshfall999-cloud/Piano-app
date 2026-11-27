@@ -54,7 +54,7 @@ export function createFx(host) {
         float d = length(gl_PointCoord - 0.5) * 2.0;
         if (d > 1.0) discard;
         float core = pow(1.0 - d, 1.6);
-        gl_FragColor = vec4(mix(vC, vec3(1.0), core * 0.7) * 1.5, vA * min(1.0, core * 1.8));   // (brighter than the colour: it glows)
+        gl_FragColor = vec4(mix(vC, vec3(1.0), core * 0.7) * 1.8, vA * min(1.0, core * 2.4));   // (brighter than the colour: it glows)
       }`,
     ...glow,
   });
@@ -106,7 +106,7 @@ export function createFx(host) {
   function burst(x, y, color, big, keyW = 20) {
     if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
-    const n = big ? 70 : 40;
+    const n = big ? 24 : 12;
     for (let i = 0; i < n; i++) {                            // sparks
       const k = next; next = (next + 1) % MAX;
       const a = (Math.random() - 0.5) * 2.2, up = 220 + Math.random() * (big ? 520 : 360);
@@ -117,10 +117,10 @@ export function createFx(host) {
       const white = Math.random() < 0.22;
       col[k * 3] = white ? 1 : c.r; col[k * 3 + 1] = white ? 1 : c.g; col[k * 3 + 2] = white ? 1 : c.b;
       born[k] = now; life[k] = 0.45 + Math.random() * (big ? 0.65 : 0.4);
-      base[k] = 5 + Math.random() * (big ? 11 : 7); glitter[k] = 0;
+      base[k] = 2.5 + Math.random() * (big ? 4 : 2.5); glitter[k] = 0;
     }
-    sprinkle(wx, wy, c, keyW, big ? 50 : 26, 1.3);
-    smoke(wx, wy, c, keyW * 1.4, big ? 160 : 90, Math.random() * 10, 1.6);
+    sprinkle(wx, wy, c, keyW, big ? 16 : 8, 1.3);
+    smoke(wx, wy, c, keyW * 1.4, big ? 40 : 20, Math.random() * 10, 1.6);
     if (big) sprinkle(wx, wy, new THREE.Color(1, 1, 1), keyW * 3, 60, 1.8);   // a streak: an extra fountain of white glitter
     // and a quick glow where the key was struck
     const fl = piece("flash");
@@ -143,7 +143,7 @@ export function createFx(host) {
       const white = Math.random() < 0.45, f = 0.75 + Math.random() * 0.25;
       col[k * 3] = white ? 1 : c.r * f; col[k * 3 + 1] = white ? 0.92 : c.g * f; col[k * 3 + 2] = white ? 0.94 : c.b * f;
       born[k] = now; life[k] = 0.9 + Math.random() * 1.3;
-      base[k] = 2.5 + Math.random() * 4; glitter[k] = 1;
+      base[k] = 1.6 + Math.random() * 1.8; glitter[k] = 1;
     }
   }
   // smoke: a fine stream of tiny lights that rises slowly and curls (all the smoke of one key follows one swirl)
@@ -159,18 +159,18 @@ export function createFx(host) {
       if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
       else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
       born[k] = now; life[k] = 2.2 + Math.random() * 2.2;
-      base[k] = 1.1 + Math.random() * 1.5; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
+      base[k] = 0.9 + Math.random() * 0.9; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
   const tally = new Map();
-  function emit(x, y, color, keyW, dt, rate = 520, key = 0) {
+  function emit(x, y, color, keyW, dt, rate = 32, key = 0) {
     if (lost) return;
     const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
     tally.set(key, want - n);
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color);
     if (n) smoke(wx, wy, c, keyW, n, key * 1.37);
-    if (Math.random() < 14 * dt) sprinkle(wx, wy, c, keyW, 1);
+    if (Math.random() < 3 * dt) sprinkle(wx, wy, c, keyW, 1);
     kick();
   }
 

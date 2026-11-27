@@ -661,7 +661,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=7").then(m => {
+    fxLoading = import("./fx3d.js?v=8").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio());
@@ -710,10 +710,13 @@
     if (drill) { drillAnswer(midi); return; }
     if (state !== "running" || mode() === "listen") return;
     if (mode() === "practice") {
+      // the next notes to play count even when played before they reach the keys (quick playing on a digital
+      // piano is often ahead of the falling notes): no need to play them again
       const g = nextGroup();
-      if (!g.length || g[0].start - time > 0.35) return;
+      if (!g.length) return;
       const n = g.find(n => n.midi === midi);
-      n ? registerHit(n, true) : registerWrong(midi);
+      if (n) { registerHit(n, g[0].start - time <= 0.35); return; }
+      if (g[0].start - time <= 0.35) registerWrong(midi);
     } else {
       let best = null;
       for (const n of song.notes)
@@ -2499,7 +2502,7 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
-      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 520, m); } catch (e) {} continue; }
+      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 32, m); } catch (e) {} continue; }
       if (Math.random() < 14 * dt) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
         vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.8 + Math.random() * 1.6, c: Math.random() < 0.45 ? "#ffffff" : c });
     }
