@@ -212,7 +212,11 @@ html.locked body > :not(#gate) { visibility: hidden; }
   #printView { position: static; overflow: visible; background: #fff; }
   .printbar { display: none; }
   #printPages { display: block; padding: 0; }
-  #printPages img { display: block; width: 100%; box-shadow: none; page-break-after: always; break-after: page; }
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  /* each sheet holds exactly one page, even when the browser keeps margins of its own (no spill-over sheets) */
+  #printPages img { display: block; width: auto; height: auto; max-width: 100%; max-height: 100vh; margin: 0 auto; box-shadow: none;
+    page-break-inside: avoid; break-inside: avoid; page-break-after: always; break-after: page; }
+  #printPages img:last-child { page-break-after: auto; break-after: auto; }
 }
 .pfield { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #a9b4ca; }
 .pfield input { width: 190px; max-width: 42vw; padding: 7px 9px; border-radius: 8px; border: 1px solid #3a4258; background: #121522; color: #e8ecf6; font-size: 15px; }

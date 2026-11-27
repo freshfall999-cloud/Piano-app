@@ -2043,7 +2043,7 @@
     put(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
     return new Blob(chunks, { type: "application/pdf" });
   }
-  let printed = null;
+  let printed = null, printedPdf = null;
   const defaultBy = def => def.notes ? (def.by === "Imported" ? "From a MIDI file" : "Arranged by Keyfall from a recording" + (def.model ? " (" + def.model + ")" : "")) : def.by || "";
   function openPrintView() {
     const view = $("printView"), box = $("printPages"), def = song.def, key = "keyfall:printname:" + def.title;
@@ -2062,17 +2062,39 @@
       box.textContent = "";
       printed = printPages($("printNames").checked, meta());
       for (const cv of printed) { const img = new Image(); img.src = cv.toDataURL("image/png"); img.alt = "Sheet music page"; box.append(img); }
+      printedPdf = null;                                             // made shortly after, ready for Print / Download
+      const these = printed;
+      setTimeout(() => { if (printed === these && !printedPdf) printedPdf = pdfFromPages(printed); }, 700);
       $("printInfo").textContent = `${printed.length} page${printed.length > 1 ? "s" : ""} · ${{ easy: "Easy", medium: "Medium", hard: "Hard", extra: "Extra hard", insane: "Extra extra hard" }[ui.level.value]} version (change it on the start card)`;
     };
     $("printNames").onchange = render;
-    $("printClose").onclick = () => { view.hidden = true; box.textContent = ""; printed = null; };
+    $("printClose").onclick = () => { view.hidden = true; box.textContent = ""; printed = printedPdf = null; };
+    const fileName = () => meta().title.replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
+    const pdf = () => printedPdf || (printedPdf = pdfFromPages(printed));
     $("printPdf").onclick = () => {
-      const url = URL.createObjectURL(pdfFromPages(printed)), a = document.createElement("a");
-      a.href = url; a.download = meta().title.replace(/[\\/:*?"<>|]+/g, " ").trim() + ".pdf";
+      const url = URL.createObjectURL(pdf()), a = document.createElement("a");
+      a.href = url; a.download = fileName();
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     };
-    $("printNow").onclick = () => window.print();
+    // Printing the web page itself lets the browser add the website's address, the date and its own margins, and a
+    // full-size page that no longer fits spills onto an extra sheet. So on an iPad or iPhone, Print hands the
+    // finished PDF to the share sheet (tap Print there): exactly one sheet per page, nothing added. Elsewhere it
+    // prints the page, sized to fit inside whatever margins the browser keeps.
+    $("printNow").onclick = async () => {
+      if (appleMobile && navigator.canShare) {
+        const file = new File([pdf()], fileName(), { type: "application/pdf" });
+        if (navigator.canShare({ files: [file] })) {
+          try { await navigator.share({ files: [file] }); return; }
+          catch (e) { if (e && e.name === "AbortError") return; console.warn("share:", e); }
+        }
+      }
+      if (appleMobile) {                                              // no share sheet: open the PDF, print it from there
+        const url = URL.createObjectURL(pdf());
+        if (window.open(url, "_blank")) { setTimeout(() => URL.revokeObjectURL(url), 120000); return; }
+      }
+      window.print();
+    };
     view.hidden = false;
     setTimeout(render, 30);
   }
