@@ -491,6 +491,7 @@
   let song = null, state = "idle";      // idle | running | paused | done
   let time = 0, score = 0, streak = 0, bestStreak = 0, hits = 0, perfects = 0, misses = 0, wrong = 0;
   const down = new Set(), autoDown = new Map(), flashes = [];
+  let rec = null;                        // ⏺ recording your own song: { t0, notes, open, pedal, pedalAt }
 
   const mode = () => ui.mode.value;
   let wantHand = "both";
@@ -515,7 +516,7 @@
     const def = SONGS[ui.song.value];
     $("readyTitle").textContent = def.title;
     $("readySub").textContent = [def.by, def.model ? "made with " + def.model : "", def.level, def.left || (def.notes && def.notes.some(n => n[3])) ? "two hands" : "one hand", def.pedal && def.pedal.length ? "pedal" : ""].filter(Boolean).join(" · ");
-    ui.ready.hidden = !$("home").hidden || !!drill || !!train;
+    ui.ready.hidden = !$("home").hidden || !!drill || !!train || !!rec;
     updateHud();
   }
   function start() {
@@ -525,7 +526,7 @@
   }
   function pause() {
     state = "paused"; ui.start.textContent = "Resume"; ui.restart.hidden = false; ui.pause.hidden = true;
-    ui.ready.hidden = !!drill || !!train || !$("home").hidden;
+    ui.ready.hidden = !!drill || !!train || !!rec || !$("home").hidden;
     autoDown.forEach((_, m) => noteOff(m)); autoDown.clear();
   }
   function toggle() { state === "running" ? pause() : start(); }
@@ -589,6 +590,7 @@
   function press(midi, vel, silent = false) {
     if (down.has(midi) || train) return;
     down.add(midi); if (!silent) noteOn(midi, vel);
+    if (rec) { recOn(midi, vel); return; }
     if (drill) { drillAnswer(midi); return; }
     if (state !== "running" || mode() === "listen") return;
     if (mode() === "practice") {
@@ -605,6 +607,7 @@
     }
   }
   function release(midi) {
+    if (rec) recOff(midi);
     if (!down.delete(midi)) return;
     if (!autoDown.has(midi)) noteOff(midi);
   }
@@ -1342,7 +1345,7 @@
     W = r.width; H = r.height;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const sheetOn = song && !drill && !train && ui.view.value === "sheet";
+    const sheetOn = song && !drill && !train && !rec && ui.view.value === "sheet";
     const kbH = sheetOn ? Math.max(80, Math.min(H * 0.19, 150)) : Math.max(90, Math.min(H * 0.26, 200));
     kbTop = H - kbH;
     if (fx) fx.resize(W, H);
@@ -2107,7 +2110,7 @@
     ctx.fillStyle = grad.bg; ctx.fillRect(0, 0, W, kbTop);
     // lane guides at each C
     ctx.strokeStyle = "rgba(127,212,255,.06)"; ctx.lineWidth = 1;
-    if (!(song && !drill && !train && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
+    if (!(song && !drill && !train && !rec && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
     // light beams rising from keys that were just hit
@@ -2121,9 +2124,9 @@
     }
     ctx.globalAlpha = 1;
     // falling notes (or the sheet music)
-    const sheetView = song && !drill && !train && ui.view.value === "sheet";
+    const sheetView = song && !drill && !train && !rec && ui.view.value === "sheet";
     if (sheetView) drawSheet();
-    if (song && !drill && !train) {
+    if (song && !drill && !train && !rec) {
       const pps = kbTop / LOOKAHEAD;
       if (!sheetView) for (const n of song.notes) {
         if (n.start - time > LOOKAHEAD) break;
@@ -2164,7 +2167,7 @@
       }
     }
     // the sustain pedal, lit while it's down
-    if (song && !drill && !train && song.pedal && song.pedal.length) {
+    if (song && !drill && !train && !rec && song.pedal && song.pedal.length) {
       const on = state !== "idle" && pedalDown(time), x = W - 74, y = ui.view.value === "sheet" && sheet ? sheet.top - 30 : kbTop - 34;
       ctx.fillStyle = on ? "rgba(255,198,92,.95)" : "rgba(255,255,255,.08)";
       if (on) { ctx.shadowColor = "#ffc65c"; ctx.shadowBlur = 14; }
@@ -2230,6 +2233,7 @@
     if (wrongs.length && now - wrongs[0].t > 400) wrongs.shift();
     if (drill) drawStaff();
     if (train) drawTraining();
+    if (rec) drawRecording();
     // hit feedback
 
     ctx.textAlign = "center";
@@ -2262,7 +2266,7 @@
       ui.mic.classList.toggle("warn", !!mic.filtered);
       ui.mic.title = mic.filtered ? "The device is filtering the microphone, which can hide soft notes" : "Listening to your piano. Tap to stop.";
     } else if (ui.micLvl.style.width !== "0%") ui.micLvl.style.width = "0%";
-    ui.prog.style.width = song && !drill && !train ? Math.max(0, Math.min(100, time / song.end * 100)).toFixed(1) + "%" : "0%";
+    ui.prog.style.width = song && !drill && !train && !rec ? Math.max(0, Math.min(100, time / song.end * 100)).toFixed(1) + "%" : "0%";
     // countdown / progress
     if (song && state !== "idle" && !train) {
       if (time < 0 && state === "running") {
@@ -2284,7 +2288,7 @@
   // ---------- Input ----------
   window.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey || /^(SELECT|INPUT)$/.test(e.target.tagName) && e.key !== " ") return;
-    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden && !drill && !train) toggle(); return; }
+    if (e.key === " ") { e.preventDefault(); if (!e.repeat && $("home").hidden && !drill && !train && !rec) toggle(); return; }
     const m = KEYMAP[e.key.toLowerCase()];
     if (m === undefined) return;
     e.preventDefault();
@@ -2370,7 +2374,25 @@
     "through the cable: some digital pianos (for example Roland FP-30X, Yamaha P-225) also send their sound over USB. Plug it in, pick it under " +
     "“🎤 Listen through” above if it's listed, and tap 🎤 Listen. Safari doesn't always use the cable even when it lists it: if notes are missed " +
     "when the room is noisy, it is probably still using the iPad's microphone.";
-  function midiMessage({ data }) {
+  // One "message" from a MIDI browser app can hold several: a chord arrives as one packet, often with running status
+  // ([0x90, 60, 90, 64, 90, 67, 90]), so the bytes are split into single messages first.
+  function midiSplit(d) {
+    const out = [];
+    let status = 0;
+    for (let i = 0; i < d.length;) {
+      const b = d[i];
+      if (b >= 0xf8) { i++; continue; }                                   // clock, active sensing
+      if (b === 0xf0) { while (i < d.length && d[i] !== 0xf7) i++; i++; status = 0; continue; }   // system exclusive
+      if (b >= 0xf1) { i += { 0xf1: 2, 0xf2: 3, 0xf3: 2 }[b] || 1; status = 0; continue; }
+      if (b >= 0x80) { status = b; i++; } else if (!status) { i++; continue; }
+      const len = (status & 0xe0) === 0xc0 ? 1 : 2;                          // program change / channel pressure: one data byte
+      if (i + len > d.length) break;
+      out.push([status, d[i], len > 1 ? d[i + 1] : 0]);
+      i += len;
+    }
+    return out;
+  }
+  function midiMessage(data) {
     const cmd = data[0] & 0xf0, a = data[1], b = data[2];
     if (cmd === 0x90 && b > 0) {
       if (mic.on && !midiIn.micNoted) {                 // the piano is plugged in: the microphone would count every note twice
@@ -2381,34 +2403,36 @@
       release(a);
       press(a, 0.3 + 0.7 * b / 127, !midiSound());
     } else if (cmd === 0x80 || cmd === 0x90) {
+      if (rec) recOff(a);
       if (midiIn.pedal && midiSound()) { midiIn.held.add(a); down.delete(a); return; }   // the key is up, the pedal keeps it ringing
       release(a);
     } else if (cmd === 0xb0 && a === 64) {              // sustain pedal
-      midiIn.pedal = b >= 64;
+      midiIn.pedal = b >= 64; recPedal(midiIn.pedal);
       if (!midiIn.pedal) { midiIn.held.forEach(m => { if (!down.has(m) && !autoDown.has(m)) noteOff(m); }); midiIn.held.clear(); }
     } else if (cmd === 0xb0 && (a === 123 || a === 120)) {   // all notes off
       [...down].forEach(release); midiIn.held.clear();
     }
   }
-  let lastMidiEv = null;
-  function onMidi(e) {                                  // listened to two ways (some MIDI browser apps only fire one); each message counts once
-    if (e === lastMidiEv) return; lastMidiEv = e;
+  function onMidi(e) {
     const d = e && e.data;
-    if (!d || d.length < 1 || (d[0] & 0xf0) === 0xf0) return;   // clock, active sensing, system messages
-    if ((d[0] & 0xf0) === 0x90 && d[2] > 0) {
-      midiIn.keys++;
-      $("midiLast").textContent = "🎹 Key received: " + NAMES[d[1] % 12] + (Math.floor(d[1] / 12) - 1) + (midiIn.keys > 1 ? " (" + midiIn.keys + " so far)" : "") + " – it works!";
-      $("midiLast").hidden = false;
-      if (midiIn.waitTimer) { clearTimeout(midiIn.waitTimer); midiIn.waitTimer = 0; }
-      if (midiIn.keys === 1) midiStatus();
+    if (!d || !d.length) return;
+    for (const m of midiSplit(d)) {
+      if ((m[0] & 0xf0) === 0x90 && m[2] > 0) {
+        midiIn.keys++;
+        $("midiLast").textContent = "🎹 Key received: " + NAMES[m[1] % 12] + (Math.floor(m[1] / 12) - 1) + (midiIn.keys > 1 ? " (" + midiIn.keys + " so far)" : "") + " – it works!";
+        $("midiLast").hidden = false;
+        if (midiIn.waitTimer) { clearTimeout(midiIn.waitTimer); midiIn.waitTimer = 0; }
+        if (midiIn.keys === 1) midiStatus();
+      }
+      midiMessage(m);
     }
-    midiMessage(e);
   }
   function hookMidi() {
     const names = [];
     midiIn.access.inputs.forEach(inp => {
-      inp.onmidimessage = onMidi;
-      if (!inp.keyfall) { inp.keyfall = true; try { inp.addEventListener("midimessage", onMidi); } catch (e) {} try { inp.open && inp.open(); } catch (e) {} }
+      // listened to both ways, since some MIDI browser apps only fire one; once the listener has fired, the other is ignored
+      if (!inp.keyfall) { inp.keyfall = true; try { inp.addEventListener("midimessage", e => { inp.kfListener = true; onMidi(e); }); } catch (e) {} try { inp.open && inp.open(); } catch (e) {} }
+      inp.onmidimessage = e => { if (!inp.kfListener) onMidi(e); };
       const name = (inp.name || "MIDI keyboard").replace(/\s+/g, " ").trim();
       if (inp.state !== "disconnected" && !/^midiweb\b|network session|^iac\b/i.test(name)) names.push(name);   // the browser app's own (virtual) port isn't a piano
     });
@@ -2459,9 +2483,92 @@
   }
   ui.song.onchange = songChanged;
 
+  // ---------- ⏺ Record my own song: everything played becomes a falling-notes song ----------
+  const recNow = () => performance.now() / 1000;
+  function startRecording() {
+    audio();
+    if (state === "running") pause();
+    rec = { t0: null, notes: [], open: new Map(), pedal: [], pedalAt: null };
+    LOW = 21; HIGH = 108; layout();
+    $("home").hidden = true; $("bar").classList.add("rec"); $("title").textContent = "⏺ Recording";
+    ui.hint.hidden = true; ui.ready.hidden = true; ui.pause.hidden = true;
+    if (midiIn.pedal) recPedal(true);
+  }
+  function recOn(midi, vel) {
+    const t = recNow();
+    if (rec.t0 === null) { rec.t0 = t; if (rec.pedalAt !== null) rec.pedalAt = t; }   // the song starts at the first note
+    recOff(midi);
+    const n = { midi, start: t, end: null, vel: Math.max(0.1, Math.min(1, vel ?? 0.8)) };
+    rec.open.set(midi, n); rec.notes.push(n);
+  }
+  function recOff(midi) {
+    const n = rec.open.get(midi);
+    if (n) { n.end = recNow(); rec.open.delete(midi); }
+  }
+  function recPedal(on) {
+    if (!rec) return;
+    if (on && rec.pedalAt === null) rec.pedalAt = rec.t0 === null ? 0 : recNow();
+    else if (!on && rec.pedalAt !== null) { if (rec.t0 !== null) rec.pedal.push([rec.pedalAt || rec.t0, recNow()]); rec.pedalAt = null; }
+  }
+  function stopRecording() {
+    const R = rec;
+    if (!R) return;
+    const t = recNow();
+    R.open.forEach(n => n.end = t); recPedal(false);
+    rec = null; $("bar").classList.remove("rec");
+    [...down].forEach(release);
+    if (R.notes.length) {
+      let count = SONGS.filter(s => /^My song \d+$/.test(s.title)).length + 1;
+      while (SONGS.some(s => s.title === "My song " + count)) count++;
+      let name = prompt(`Recorded ${R.notes.length} notes. Name your song:`, "My song " + count);
+      if (name === null && confirm("Throw this recording away?")) { showHome(); return; }
+      name = (name || "").trim().replace(/\s+/g, " ").slice(0, 60) || "My song " + count;
+      const r3 = x => Math.round(x * 1000) / 1000;
+      const notes = R.notes.map(n => [n.midi, r3(n.start - R.t0), r3(Math.max(0.05, n.end - n.start)), +(n.midi < 60), Math.round(n.vel * 100) / 100]);
+      const beat = guessBeat(R.notes.map(n => ({ start: n.start - R.t0 })));
+      const def = { title: name, by: "Recorded by you", level: "My songs", notes, beat, bar0: 0 };
+      const pedal = R.pedal.map(([a, b]) => [r3(Math.max(0, a - R.t0)), r3(b - R.t0)]).filter(([a, b]) => b > a);
+      if (pedal.length) def.pedal = pedal;
+      SONGS.push(def); saveImported(); refreshOptions();
+      ui.song.value = SONGS.length - 1; ui.level.value = "hard";
+      $("importMsg").textContent = `Saved “${name}” (${notes.length} notes) in My songs. Open it to see your notes fall.`;
+      sfx("trained");
+    }
+    showHome(); songChanged();
+  }
+  function drawRecording() {
+    const R = rec, now = recNow(), pps = kbTop / LOOKAHEAD;
+    for (let i = R.notes.length - 1; i >= 0; i--) {         // what you play rises up from the keys
+      const n = R.notes[i], end = n.end ?? now;
+      if (now - end > LOOKAHEAD) { if (now - n.start > LOOKAHEAD * 4) break; continue; }
+      if (n.midi < LOW || n.midi > HIGH) continue;
+      const k = keyOf(n.midi), y0 = kbTop - (now - n.start) * pps, y1 = kbTop - (now - end) * pps;
+      ctx.fillStyle = COLORS[n.midi < 60 ? "left" : "right"]; ctx.globalAlpha = 0.35 + 0.6 * n.vel;
+      const pad = k.black ? 1 : 2;
+      ctx.fillRect(k.x + pad, Math.max(0, y0), k.w - pad * 2, Math.max(3, y1 - Math.max(0, y0)));
+    }
+    ctx.globalAlpha = 1; ctx.textAlign = "center"; ctx.fillStyle = "#e8eaf2";
+    ctx.font = "700 26px system-ui, sans-serif";
+    const y = Math.max(60, kbTop * 0.22);
+    if (R.t0 === null) {
+      ctx.fillText("Play anything: recording starts with your first note.", W / 2, y);
+      ctx.font = "16px system-ui, sans-serif"; ctx.fillStyle = "#a3a8bd";
+      ctx.fillText("Tap ⏹ Stop recording when you're done, and it becomes a falling-notes song.", W / 2, y + 30);
+    } else {
+      const s = Math.floor(now - R.t0), blink = Math.floor(now * 2) % 2;
+      const txt = `Recording ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${R.notes.length} notes`, tw = ctx.measureText(txt).width;
+      ctx.fillStyle = blink ? "#ff4d5e" : "#7a2630"; ctx.beginPath(); ctx.arc(W / 2 + 14 - tw / 2 - 20, y - 9, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#e8eaf2";
+      ctx.fillText(txt, W / 2 + 14, y);
+    }
+  }
+  $("recBtn").onclick = startRecording;
+  $("recStop").onclick = stopRecording;
+
   // ---------- Song library screen ----------
   function showHome() {
     if (train) { finishTraining(); return; }
+    if (rec) { stopRecording(); return; }
     if (state === "running") pause();
     const learned = calib ? Object.keys(calib.keys).length : 0;
     $("trainStatus").textContent = learned ? `Trained on ${learned} of 88 keys. Tap to train again.` : "Play each key once so the microphone learns how your piano sounds.";

@@ -227,3 +227,6 @@ html.locked body > :not(#gate) { visibility: hidden; }
 #midi:not([hidden]) { padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(95,211,138,.5); background: rgba(95,211,138,.12); color: #bff3cf; font-size: 14px; font-weight: 600; white-space: nowrap; }
 
 .midilast { margin: 6px 0; font-weight: 700; color: #7ee08a; }
+.reccard { border-color: #9a3d4c; background: #3a1d25; }
+.reccard:hover, .reccard:active { background: #47222c; }
+header:not(.rec) .reconly, header.rec .songonly, header.rec .drillonly, header.rec .trainonly, header.rec #hud { display: none; }
