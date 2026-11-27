@@ -2344,14 +2344,16 @@
       st.textContent = "Plug your digital piano in (or pair it by Bluetooth), turn it on, then tap Connect.";
       btn.hidden = false; help.innerHTML = MIDI_HELP;
     } else {
-      const silent = midiIn.names.length && !midiIn.keys && midiIn.waitTimer === -1;
-      st.textContent = !midiIn.names.length ? "No digital piano found yet. Check the cable and that the piano is on, then tap Look again."
-        : silent ? "⚠️ Found " + midiIn.names.join(", ") + ", but no keys have arrived from it yet."
-        : "✅ Connected: " + midiIn.names.join(", ") + (midiIn.keys ? ". Just play: every key counts, no microphone needed." : ". Play a key to check it works.");
-      btn.hidden = !!midiIn.names.length && !silent; btn.textContent = "Look again";
-      help.innerHTML = !midiIn.names.length ? MIDI_HELP + ROLAND_HELP : silent ? NO_KEYS_HELP + ROLAND_HELP : "";
+      const names = midiIn.names.length ? midiIn.names : midiIn.keys ? ["your piano"] : [];
+      const silent = names.length && !midiIn.keys && midiIn.waitTimer === -1;
+      st.textContent = !names.length ? "No digital piano found yet: the iPad doesn't see it. Check the cable and the piano's settings below, then tap Look again."
+        : silent ? "⚠️ Found " + names.join(", ") + ", but no keys have arrived from it yet."
+        : "✅ Connected: " + names.join(", ") + (midiIn.keys ? ". Just play: every key counts, no microphone needed." : ". Play a key to check it works.");
+      btn.hidden = !!names.length && !silent; btn.textContent = "Look again";
+      help.innerHTML = !names.length ? MIDI_HELP + ROLAND_HELP : silent ? NO_KEYS_HELP + ROLAND_HELP : "";
     }
-    ui.midi.textContent = midiIn.names.length ? "🎹 Piano" : ""; ui.midi.hidden = !midiIn.names.length; ui.midi.className = "stat midi";
+    const on = midiIn.names.length || midiIn.keys;
+    ui.midi.textContent = on ? "🎹 Piano" : ""; ui.midi.hidden = !on; ui.midi.className = "stat midi";
     ui.midi.title = midiIn.names.join(", ");
   }
   const CABLE = "Connect the piano's <b>USB</b> port (often labelled “USB to Host”) with a USB cable: on an iPad with a USB-C port through Apple's " +
@@ -2397,7 +2399,8 @@
       midiIn.keys++;
       $("midiLast").textContent = "🎹 Key received: " + NAMES[d[1] % 12] + (Math.floor(d[1] / 12) - 1) + (midiIn.keys > 1 ? " (" + midiIn.keys + " so far)" : "") + " – it works!";
       $("midiLast").hidden = false;
-      if (midiIn.waitTimer) { clearTimeout(midiIn.waitTimer); midiIn.waitTimer = 0; midiStatus(); }
+      if (midiIn.waitTimer) { clearTimeout(midiIn.waitTimer); midiIn.waitTimer = 0; }
+      if (midiIn.keys === 1) midiStatus();
     }
     midiMessage(e);
   }
@@ -2406,7 +2409,8 @@
     midiIn.access.inputs.forEach(inp => {
       inp.onmidimessage = onMidi;
       if (!inp.keyfall) { inp.keyfall = true; try { inp.addEventListener("midimessage", onMidi); } catch (e) {} try { inp.open && inp.open(); } catch (e) {} }
-      if (inp.state !== "disconnected") names.push((inp.name || "MIDI keyboard").replace(/\s+/g, " ").trim());
+      const name = (inp.name || "MIDI keyboard").replace(/\s+/g, " ").trim();
+      if (inp.state !== "disconnected" && !/^midiweb\b|network session|^iac\b/i.test(name)) names.push(name);   // the browser app's own (virtual) port isn't a piano
     });
     const was = midiIn.names.length;
     midiIn.names = [...new Set(names)];
