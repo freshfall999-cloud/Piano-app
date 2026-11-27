@@ -4,7 +4,7 @@
 // It only draws while something is moving, so it costs nothing when you aren't playing.
 import * as THREE from "./vendor/three/three.module.min.js";
 
-const MAX = 12000;                                        // sparks, smoke and glitter alive at once
+const MAX = 26000;                                        // sparks, smoke and glitter alive at once
 
 export function createFx(host) {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
@@ -45,7 +45,7 @@ export function createFx(host) {
       void main() {
         vA = alpha; vC = color;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = max(1.4, size * scale / -mv.z);
+        gl_PointSize = max(1.0, size * scale / -mv.z);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
@@ -91,7 +91,7 @@ export function createFx(host) {
 
   function resize(w, h, pr) {
     W = Math.max(1, w); H = Math.max(1, h);
-    if (pr) ratio = pr;
+    if (pr) ratio = Math.min(pr, 3);
     renderer.setPixelRatio(ratio);
     renderer.setSize(W, H, false);
     camera.aspect = W / H;
@@ -143,7 +143,7 @@ export function createFx(host) {
       const white = Math.random() < 0.45, f = 0.75 + Math.random() * 0.25;
       col[k * 3] = white ? 1 : c.r * f; col[k * 3 + 1] = white ? 0.92 : c.g * f; col[k * 3 + 2] = white ? 0.94 : c.b * f;
       born[k] = now; life[k] = 0.9 + Math.random() * 1.3;
-      base[k] = 5 + Math.random() * 8; glitter[k] = 1;
+      base[k] = 2.5 + Math.random() * 4; glitter[k] = 1;
     }
   }
   // smoke: a fine stream of tiny lights that rises slowly and curls (all the smoke of one key follows one swirl)
@@ -159,12 +159,12 @@ export function createFx(host) {
       if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
       else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
       born[k] = now; life[k] = 2.2 + Math.random() * 2.2;
-      base[k] = 2 + Math.random() * 2.8; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
+      base[k] = 1.1 + Math.random() * 1.5; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
   const tally = new Map();
-  function emit(x, y, color, keyW, dt, rate = 220, key = 0) {
+  function emit(x, y, color, keyW, dt, rate = 520, key = 0) {
     if (lost) return;
     const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
     tally.set(key, want - n);

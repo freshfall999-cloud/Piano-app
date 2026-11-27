@@ -1,15 +1,18 @@
-// Keyfall sound: a sampled grand piano (Salamander Grand Piano V3, CC BY 3.0, Alexander Holm) and
-// synthesized sound effects. Notes between the recorded ones are made by re-pitching the nearest recording.
+// Keyfall sound: a sampled grand piano (Salamander Grand Piano V3, CC BY 3.0, Alexander Holm) recorded at three
+// strengths (soft, medium, loud: a harder key sounds brighter, not just louder), and synthesized sound effects and
+// band. Notes between the recorded ones are made by re-pitching the nearest recording.
 (() => {
   "use strict";
   const NAMES = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"];
   const RECORDED = [];                      // A0, C1, D#1, F#1, A1, ... A7, C8 (every 3 semitones)
   for (let m = 21; m <= 108; m += 3) RECORDED.push(m);
-  const fileOf = m => `samples/${NAMES[m % 12]}${Math.floor(m / 12) - 1}.mp3`;
+  const LAYERS = [{ dir: "samples/soft/", v: 0.3 }, { dir: "samples/", v: 0.62 }, { dir: "samples/loud/", v: 0.92 }];
+  const fileOf = (m, l) => `${LAYERS[l].dir}${NAMES[m % 12]}${Math.floor(m / 12) - 1}.mp3`;
+  const KEEP = 10;                          // seconds kept of each recording (a held note has faded away by then)
 
   let ac = null, out = null, sfxBus = null, reverb = null, pianoBus = null, bandBus = null, noiseBuf = null;
   const bandVoices = new Set();
-  const buffers = new Map(), voices = new Map();
+  const buffers = new Map(), voices = new Map();   // buffers: "layer:midi" → { buf, at }
   let loading = false;
 
   function decode(data) {                   // older Safari only has the callback form
@@ -18,17 +21,30 @@
       if (p && p.then) p.then(ok, fail);
     });
   }
+  // Keep a recording ready to play at once: one channel (the app places each note in stereo itself, and it halves
+  // the memory), starting right at the hammer's strike (no silent gap before it: no delay), at most KEEP seconds.
+  function prepare(buf) {
+    const sr = buf.sampleRate, L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    let at = 0;
+    while (at < L.length - 1 && Math.abs(L[at]) + Math.abs(R[at]) < 0.004) at++;
+    at = Math.max(0, at - Math.round(sr * 0.0005));
+    const len = Math.min(L.length - at, Math.round(sr * KEEP)), fade = Math.round(sr * 1.5);
+    const out = ac.createBuffer(1, len, sr), d = out.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (L[at + i] + R[at + i]) * 0.5 * (len - i < fade && len >= sr * KEEP - 1 ? (len - i) / fade : 1);
+    return out;
+  }
   function load() {
     if (loading) return;
     loading = true;
-    // middle of the keyboard first, so the notes people use most sound right away
-    const order = RECORDED.slice().sort((a, b) => Math.abs(a - 62) - Math.abs(b - 62));
+    // the medium recordings first, middle of the keyboard first: the notes people use most sound right away
+    const order = [];
+    for (const l of [1, 2, 0]) RECORDED.slice().sort((a, b) => Math.abs(a - 62) - Math.abs(b - 62)).forEach(m => order.push([l, m]));
     let i = 0;
     const next = () => {
       if (i >= order.length) return;
-      const m = order[i++];
-      fetch(fileOf(m)).then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).then(decode)
-        .then(buf => buffers.set(m, buf)).catch(() => {}).then(next);
+      const [l, m] = order[i++];
+      fetch(fileOf(m, l)).then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).then(decode)
+        .then(buf => buffers.set(l + ":" + m, prepare(buf))).catch(() => {}).then(next);
     };
     for (let k = 0; k < 4; k++) next();     // four downloads at a time
   }
@@ -44,15 +60,19 @@
   }
 
   // a concert hall for the piano: a short gap, then a long, darkening, stereo tail (like the piano videos)
-  function makeHall(seconds = 2.8, preDelay = 0.022) {
+  // (a few early echoes off near walls give the piano body and width; the tail is short, so it never smears
+  // notes together like a held pedal)
+  function makeHall(seconds = 1.9, preDelay = 0.018) {
     const sr = ac.sampleRate, len = Math.round(sr * seconds), pre = Math.round(sr * preDelay), ir = ac.createBuffer(2, len, sr);
+    const early = [[0.007, 0.5, 0.3], [0.011, 0.3, 0.45], [0.017, 0.35, 0.2], [0.023, 0.18, 0.3], [0.031, 0.2, 0.12]];
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
+      for (const [t, a, b] of early) d[Math.round(sr * t) + ch * 3] += ch ? b : a;
       let y = 0;
       for (let i = pre; i < len; i++) {
         const f = (i - pre) / (len - pre), a = 0.85 - 0.75 * f;          // the high notes die away first
         y += a * ((Math.random() * 2 - 1) - y);
-        d[i] = y * Math.exp(-f * 6.2) * (i - pre < sr * 0.004 ? (i - pre) / (sr * 0.004) : 1);
+        d[i] += 0.5 * y * Math.exp(-f * 7) * (i - pre < sr * 0.01 ? (i - pre) / (sr * 0.01) : 1);
       }
     }
     const c = ac.createConvolver(); c.buffer = ir; return c;
@@ -64,7 +84,7 @@
     // the piano: a little warmth in the low end, the direct sound, and the hall
     pianoBus = ac.createGain(); pianoBus.gain.value = 0.9;
     const warm = ac.createBiquadFilter(); warm.type = "lowshelf"; warm.frequency.value = 200; warm.gain.value = 2.5;
-    const hall = makeHall(), hallWet = ac.createGain(); hallWet.gain.value = 0.85;
+    const hall = makeHall(), hallWet = ac.createGain(); hallWet.gain.value = 0.3;
     pianoBus.connect(warm); warm.connect(out); warm.connect(hall); hall.connect(hallWet).connect(out);
     // the band behind you: its own level, a little of the same hall
     bandBus = ac.createGain(); bandBus.gain.value = 0.55;
@@ -82,35 +102,49 @@
   }
 
   // ---------- piano ----------
-  function nearest(m) {
-    let best = null;
-    for (const s of buffers.keys()) if (best === null || Math.abs(s - m) < Math.abs(best - m)) best = s;
-    return best !== null && Math.abs(best - m) <= 6 ? best : null;
+  // the recording to use: the strength nearest to how hard the key was played, from the nearest recorded key
+  function pick(m, vel) {
+    const best = (keys) => {                // among these recorded keys, the nearest that is loaded, at the nearest strength
+      let got = null;
+      for (const r of keys) LAYERS.forEach((L, l) => {
+        if (!buffers.has(l + ":" + r)) return;
+        const cost = Math.abs(r - m) * 10 + Math.abs(L.v - vel);
+        if (!got || cost < got.cost) got = { s: r, l, cost };
+      });
+      return got;
+    };
+    const near = RECORDED.filter(r => Math.abs(r - m) <= 1);
+    const p = best(near.length ? near : []) || best(RECORDED.filter(r => Math.abs(r - m) <= 6));
+    return p ? { s: p.s, l: p.l, buf: buffers.get(p.l + ":" + p.s) } : null;
   }
   function noteOn(m, vel = 0.8) {
     if (!ac) return false;
-    const s = nearest(m);
-    if (s === null) return false;           // not loaded yet: the caller falls back to its own synth
+    const p = pick(m, vel);
+    if (!p) return false;                   // not loaded yet: the caller falls back to its own synth
     noteOff(m, 0.03);
     const t = ac.currentTime, src = ac.createBufferSource(), g = ac.createGain(), tone = ac.createBiquadFilter();
-    src.buffer = buffers.get(s);
-    src.playbackRate.value = Math.pow(2, (m - s) / 12);
-    const level = 0.25 + 0.75 * Math.pow(vel, 1.4);
+    src.buffer = p.buf;
+    src.playbackRate.value = Math.pow(2, (m - p.s) / 12);
+    // the recording already sounds soft or loud; fine-tune between the three strengths
+    const level = 0.8 * Math.pow(10, (vel - LAYERS[p.l].v) * 0.9);
     g.gain.setValueAtTime(level, t);
-    // soft notes are darker, loud ones bright (as on a real piano); low notes a little to the left, high to the right
-    tone.type = "lowpass"; tone.Q.value = 0.5; tone.frequency.setValueAtTime(1400 + 15000 * vel * vel, t);
+    tone.type = "lowpass"; tone.Q.value = 0.4; tone.frequency.setValueAtTime(3500 + 15000 * vel * vel, t);
+    // low notes a little to the left, high ones to the right, as you hear them sitting at the piano
     let node = src.connect(tone).connect(g);
-    if (ac.createStereoPanner) { const pan = ac.createStereoPanner(); pan.pan.value = Math.max(-0.4, Math.min(0.4, (m - 64) / 60)); node = node.connect(pan); }
+    if (ac.createStereoPanner) { const pan = ac.createStereoPanner(); pan.pan.value = Math.max(-0.55, Math.min(0.55, (m - 64) / 44)); node = node.connect(pan); }
     node.connect(pianoBus);
     src.start(t);
     voices.set(m, { src, g });
     src.onended = () => { if (voices.get(m) && voices.get(m).src === src) voices.delete(m); };
     return true;
   }
-  function noteOff(m, release = 0.3) {
+  // letting go of a key: the damper stops the strings quickly (a bass string a little slower); the top keys
+  // of a grand have no dampers and ring on
+  function noteOff(m, release) {
     const v = voices.get(m);
     if (!v) return;
     voices.delete(m);
+    if (release === undefined) release = m >= 89 ? 2.4 : m < 48 ? 0.3 : m < 72 ? 0.2 : 0.14;
     const t = ac.currentTime;
     v.g.gain.cancelScheduledValues(t);
     v.g.gain.setValueAtTime(v.g.gain.value, t);
@@ -214,5 +248,5 @@
     bandVoices.clear();
   }
 
-  window.KeyfallSound = { init, noteOn, noteOff, sfx, band, bandStop, get loaded() { return buffers.size; }, total: RECORDED.length };
+  window.KeyfallSound = { init, noteOn, noteOff, sfx, band, bandStop, get loaded() { let n = 0; buffers.forEach((_, k) => { if (k[0] === "1") n++; }); return n; }, total: RECORDED.length };
 })();

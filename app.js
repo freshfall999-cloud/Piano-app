@@ -37,8 +37,13 @@
     if (!AC) return null;
     const old = ac;
     try { ac = new AC({ latencyHint: "interactive" }); } catch (e) { ac = new AC(); }
-    master = ac.createDynamicsCompressor();
-    master.connect(ac.destination);
+    // no compressor in the way (it holds the sound back a few milliseconds to look ahead): a gentle limiter
+    // curve instead that only rounds off the loudest peaks, with no delay
+    master = ac.createGain(); master.gain.value = 0.9;
+    const clip = ac.createWaveShaper(), curve = new Float32Array(2048);
+    for (let i = 0; i < curve.length; i++) { const x = i / (curve.length - 1) * 2 - 1, ax = Math.abs(x); curve[i] = ax < 0.75 ? x : Math.sign(x) * (0.75 + 0.25 * Math.tanh((ax - 0.75) / 0.25)); }
+    clip.curve = curve;
+    master.connect(clip).connect(ac.destination);
     voices.clear(); sampled.clear();
     if (window.KeyfallSound) KeyfallSound.init(ac, master);
     ac.onstatechange = () => { if (ac.state !== "running" && ac.state !== "closed" && !document.hidden) setTimeout(() => wakeAudio(false), 200); };
@@ -656,7 +661,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=6").then(m => {
+    fxLoading = import("./fx3d.js?v=7").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio());
@@ -1456,11 +1461,11 @@
 
   // ---------- Layout & drawing ----------
   let W = 0, H = 0, kbTop = 0, whiteW = 0, keys = [];
-  // Sharpness: "Ultra" draws 1.5× more finely than the screen's own pixels in each direction (smoother edges and
-  // finer sparkles), up to what an iPad's browser allows for one picture (about 16 million pixels; 8K is 33 million).
-  // If the iPad can't keep up, it drops back to the screen's own pixels by itself.
+  // Sharpness: "Maximum" draws 2× and "Ultra" 1.5× more finely than the screen's own pixels in each direction
+  // (smoother edges and finer sparkles), up to what an iPad's browser allows for one picture (about 16 million
+  // pixels; 8K is 33 million). If the iPad can't keep up, it steps down by itself.
   function pixelRatio() {
-    const dpr = window.devicePixelRatio || 1, want = dpr * (ui.sharp.value === "ultra" ? 1.5 : 1);
+    const dpr = window.devicePixelRatio || 1, want = dpr * ({ max: 2, ultra: 1.5 }[ui.sharp.value] || 1);
     const r = canvas.getBoundingClientRect(), area = Math.max(1, r.width * r.height);
     return Math.max(1, Math.min(want, Math.sqrt(16e6 / area)));
   }
@@ -2494,7 +2499,7 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
-      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 220, m); } catch (e) {} continue; }
+      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 520, m); } catch (e) {} continue; }
       if (Math.random() < 14 * dt) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
         vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.8 + Math.random() * 1.6, c: Math.random() < 0.45 ? "#ffffff" : c });
     }
@@ -2503,10 +2508,14 @@
   function frame(now) {
     micTick();
     const dt = Math.min((now - last) / 1000, 0.1);
-    if (state === "running" && !document.hidden && ui.sharp.value === "ultra" && !perf.auto) {   // too slow for Ultra: drop back
+    if (state === "running" && !document.hidden && ui.sharp.value !== "standard") {   // too slow: one step down
       perf.n++; perf.sum += dt;
       if (perf.n >= 120) {
-        if (perf.sum / perf.n > 1 / 40) { perf.auto = true; ui.sharp.value = "standard"; $("sharpNote").textContent = "(set to Standard: this device was too slow for Ultra)"; layout(); }
+        if (perf.sum / perf.n > 1 / 40) {
+          const was = ui.sharp.options[ui.sharp.selectedIndex].text.split(":")[0];
+          ui.sharp.value = ui.sharp.value === "max" ? "ultra" : "standard";
+          $("sharpNote").textContent = `(stepped down from ${was}: this device couldn't keep up)`; layout();
+        }
         perf.n = 0; perf.sum = 0;
       }
     }
@@ -2633,7 +2642,7 @@
       }
       midiIn.held.delete(a);
       release(a);
-      press(a, 0.3 + 0.7 * b / 127, !midiSound());
+      press(a, Math.pow(b / 127, 0.8), !midiSound());     // how hard the key was played picks the piano's soft, medium or loud sound
     } else if (cmd === 0x80 || cmd === 0x90) {
       if (rec) recOff(a);
       if (midiIn.pedal && midiSound()) { midiIn.held.add(a); down.delete(a); return; }   // the key is up, the pedal keeps it ringing
@@ -3215,7 +3224,7 @@
   try { setLook(localStorage.getItem("keyfall:look") || "red"); } catch (e) { setLook("red"); }
   ui.look.onchange = () => setLook(ui.look.value);
   try { const v = localStorage.getItem("keyfall:sharp"); if (v && v !== ui.sharp.value) { ui.sharp.value = v; layout(); } } catch (e) {}
-  ui.sharp.onchange = () => { perf.auto = false; $("sharpNote").textContent = ""; try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {} layout(); };
+  ui.sharp.onchange = () => { perf.n = perf.sum = 0; $("sharpNote").textContent = ""; try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {} layout(); };
   ui.fx3d.onchange = () => { try { localStorage.setItem("keyfall:fx3d", ui.fx3d.checked ? "1" : "0"); } catch (e) {} setFx(ui.fx3d.checked); };
   setTimeout(() => setFx(ui.fx3d.checked), 1200);
   ui.pause.onclick = toggle;

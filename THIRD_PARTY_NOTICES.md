@@ -13,7 +13,7 @@ there: they are never uploaded or published.
 
 ## Sound
 
-- **Salamander Grand Piano V3** by Alexander Holm — piano samples in `samples/`. Licence: Creative Commons
+- **Salamander Grand Piano V3** by Alexander Holm — piano samples in `samples/` (three strengths: `samples/soft/`, `samples/`, `samples/loud/`). Licence: Creative Commons
   Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/). Converted to MP3 and renamed; see
   `samples/CREDITS.md`.
 
