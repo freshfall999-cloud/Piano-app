@@ -1,10 +1,10 @@
 // 3D hit effects, drawn with three.js (MIT) on a see-through layer over the keyboard:
-// sparks that burst out of the key toward you, glitter that drifts up like glowing smoke while a key sounds,
-// a ring of light rippling across the keys and a quick glow.
+// sparks that burst out of the key toward you, a stream of tiny lights that rises from every sounding key and
+// curls like smoke (the particle look of piano videos), twinkling glitter and a quick glow.
 // It only draws while something is moving, so it costs nothing when you aren't playing.
 import * as THREE from "./vendor/three/three.module.min.js";
 
-const MAX = 3200;                                         // sparks and glitter alive at once
+const MAX = 12000;                                        // sparks, smoke and glitter alive at once
 
 export function createFx(host) {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
@@ -29,7 +29,9 @@ export function createFx(host) {
   // ---- sparks: one point cloud, soft round dots that grow as they fly toward you ----
   const pos = new Float32Array(MAX * 3), col = new Float32Array(MAX * 3), alpha = new Float32Array(MAX), size = new Float32Array(MAX);
   const vel = new Float32Array(MAX * 3), born = new Float32Array(MAX), life = new Float32Array(MAX).fill(0), base = new Float32Array(MAX);
-  const glitter = new Uint8Array(MAX);                     // 1: glitter (floats up, wobbles, twinkles); 0: a spark (flies out and falls)
+  const glitter = new Uint8Array(MAX);                     // 0: a spark (flies out and falls); 1: glitter (floats, twinkles); 2: smoke
+  const seed = new Float32Array(MAX);                      // smoke from one key shares a seed, so it curls together in wisps
+  let ratio = Math.min(window.devicePixelRatio || 1, 2);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute("color", new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
@@ -43,7 +45,7 @@ export function createFx(host) {
       void main() {
         vA = alpha; vC = color;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = size * scale / -mv.z;
+        gl_PointSize = max(1.4, size * scale / -mv.z);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
@@ -87,9 +89,10 @@ export function createFx(host) {
   // screen pixels (from the top left of the stage) → the 3D plane the camera sees at 1:1
   const toWorld = (x, y) => [x - W / 2, H / 2 - y];
 
-  function resize(w, h) {
+  function resize(w, h, pr) {
     W = Math.max(1, w); H = Math.max(1, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    if (pr) ratio = pr;
+    renderer.setPixelRatio(ratio);
     renderer.setSize(W, H, false);
     camera.aspect = W / H;
     dist = H / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
@@ -116,7 +119,8 @@ export function createFx(host) {
       born[k] = now; life[k] = 0.45 + Math.random() * (big ? 0.65 : 0.4);
       base[k] = 5 + Math.random() * (big ? 11 : 7); glitter[k] = 0;
     }
-    sprinkle(wx, wy, c, keyW, big ? 90 : 50, 1.3);
+    sprinkle(wx, wy, c, keyW, big ? 50 : 26, 1.3);
+    smoke(wx, wy, c, keyW * 1.4, big ? 160 : 90, Math.random() * 10, 1.6);
     if (big) sprinkle(wx, wy, new THREE.Color(1, 1, 1), keyW * 3, 60, 1.8);   // a streak: an extra fountain of white glitter
     // and a quick glow where the key was struck
     const fl = piece("flash");
@@ -142,13 +146,31 @@ export function createFx(host) {
       base[k] = 5 + Math.random() * 8; glitter[k] = 1;
     }
   }
-  // a key that is sounding (held, or played by the app): a steady trickle of glitter (rate: per second)
-  function emit(x, y, color, keyW, dt, rate = 80) {
+  // smoke: a fine stream of tiny lights that rises slowly and curls (all the smoke of one key follows one swirl)
+  function smoke(wx, wy, c, keyW, n, sd, speed = 1) {
+    const now = performance.now() / 1000;
+    for (let i = 0; i < n; i++) {
+      const k = next; next = (next + 1) % MAX;
+      pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.75; pos[k * 3 + 1] = wy + Math.random() * 5; pos[k * 3 + 2] = Math.random() * 14;
+      vel[k * 3] = (Math.random() - 0.5) * 14 * speed;
+      vel[k * 3 + 1] = (22 + Math.random() * 55) * speed;
+      vel[k * 3 + 2] = Math.random() * 10;
+      const pale = Math.random() < 0.62, b = 0.8 + Math.random() * 0.2;
+      if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
+      else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
+      born[k] = now; life[k] = 2.2 + Math.random() * 2.2;
+      base[k] = 2 + Math.random() * 2.8; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
+    }
+  }
+  // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
+  const tally = new Map();
+  function emit(x, y, color, keyW, dt, rate = 220, key = 0) {
     if (lost) return;
-    const want = rate * dt, n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
-    if (!n) return;
-    const [wx, wy] = toWorld(x, y);
-    sprinkle(wx, wy, new THREE.Color(color), keyW, n);
+    const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
+    tally.set(key, want - n);
+    const [wx, wy] = toWorld(x, y), c = new THREE.Color(color);
+    if (n) smoke(wx, wy, c, keyW, n, key * 1.37);
+    if (Math.random() < 14 * dt) sprinkle(wx, wy, c, keyW, 1);
     kick();
   }
 
@@ -164,13 +186,23 @@ export function createFx(host) {
       const age = (now - born[k]) / life[k];
       if (age >= 1) { life[k] = 0; alpha[k] = 0; size[k] = 0; continue; }
       alive++;
-      if (glitter[k]) {                                    // rises gently and swirls, like sparkling smoke
+      if (glitter[k] === 2) {                              // smoke: follows a slowly turning swirl as it rises
+        const y = pos[k * 3 + 1], sd = seed[k];
+        const want = Math.sin(y * 0.011 + sd * 3.1 + now * 0.6) * 38 + Math.sin(y * 0.027 - now * 1.1 + sd * 5.3) * 16;
+        vel[k * 3] += (want - vel[k * 3]) * Math.min(1, dt * 2.2);
+        vel[k * 3 + 1] = Math.min(150, vel[k * 3 + 1] + 24 * dt); vel[k * 3 + 2] *= float;
+      } else if (glitter[k]) {                             // glitter: rises gently and swirls
         vel[k * 3] = vel[k * 3] * float + Math.sin(now * 2.1 + k * 1.7 + pos[k * 3 + 1] * 0.015) * 160 * dt;
         vel[k * 3 + 1] = vel[k * 3 + 1] * float + 40 * dt; vel[k * 3 + 2] *= float;
       } else {
         vel[k * 3] *= drag; vel[k * 3 + 2] *= drag; vel[k * 3 + 1] = vel[k * 3 + 1] * drag - 900 * dt;   // air and gravity
       }
       pos[k * 3] += vel[k * 3] * dt; pos[k * 3 + 1] += vel[k * 3 + 1] * dt; pos[k * 3 + 2] += vel[k * 3 + 2] * dt;
+      if (glitter[k] === 2) {
+        alpha[k] = Math.pow(1 - age, 1.6) * Math.min(1, age * 14) * (0.75 + 0.25 * Math.sin(now * (6 + (k % 5)) + k));
+        size[k] = base[k] * (1 - age * 0.3);
+        continue;
+      }
       alpha[k] = Math.pow(1 - age, 1.3) * Math.min(1, age * 12);
       if (glitter[k]) alpha[k] *= 0.5 + 0.5 * Math.sin(now * (9 + (k % 7) * 2) + k);          // twinkle
       size[k] = base[k] * (1 - age * 0.5);
