@@ -7,7 +7,8 @@
   for (let m = 21; m <= 108; m += 3) RECORDED.push(m);
   const fileOf = m => `samples/${NAMES[m % 12]}${Math.floor(m / 12) - 1}.mp3`;
 
-  let ac = null, out = null, sfxBus = null, reverb = null, pianoBus = null;
+  let ac = null, out = null, sfxBus = null, reverb = null, pianoBus = null, bandBus = null, noiseBuf = null;
+  const bandVoices = new Set();
   const buffers = new Map(), voices = new Map();
   let loading = false;
 
@@ -65,6 +66,13 @@
     const warm = ac.createBiquadFilter(); warm.type = "lowshelf"; warm.frequency.value = 200; warm.gain.value = 2.5;
     const hall = makeHall(), hallWet = ac.createGain(); hallWet.gain.value = 0.85;
     pianoBus.connect(warm); warm.connect(out); warm.connect(hall); hall.connect(hallWet).connect(out);
+    // the band behind you: its own level, a little of the same hall
+    bandBus = ac.createGain(); bandBus.gain.value = 0.55;
+    const bandHall = ac.createGain(); bandHall.gain.value = 0.35;
+    bandBus.connect(out); bandBus.connect(bandHall).connect(hall);
+    noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    bandVoices.clear();
     reverb = makeReverb();
     const wet = ac.createGain(); wet.gain.value = 0.35;
     reverb.connect(wet).connect(out);
@@ -156,5 +164,55 @@
   };
   function sfx(name, arg) { if (ac && EFFECTS[name]) EFFECTS[name](arg); }
 
-  window.KeyfallSound = { init, noteOn, noteOff, sfx, get loaded() { return buffers.size; }, total: RECORDED.length };
+  // ---------- the band: drums, bass and strings, all synthesized ----------
+  function noiseHit(t, { dur, gain, type, freq, q = 0.8, attack = 0.001 }) {
+    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    src.buffer = noiseBuf; src.loop = true; f.type = type; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(g).connect(bandBus); src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  }
+  function tone(t, { type = "sine", from, to = from, glide = 0.1, dur, gain }) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(from, t); if (to !== from) o.frequency.exponentialRampToValueAtTime(to, t + glide);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(bandBus); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function held(t, nodes, g, end, release) {             // a voice that can be cut short (pause, a jump back)
+    const v = { nodes, g };
+    g.gain.setTargetAtTime(0.0001, end, release / 4);
+    nodes.forEach(n => n.stop(end + release + 0.1));
+    nodes[0].onended = () => bandVoices.delete(v);
+    bandVoices.add(v);
+  }
+  const BAND = {
+    kick: (t, v) => { tone(t, { from: 140, to: 42, glide: 0.11, dur: 0.38, gain: 0.95 * v }); noiseHit(t, { dur: 0.02, gain: 0.25 * v, type: "lowpass", freq: 2500 }); },
+    snare: (t, v) => { noiseHit(t, { dur: 0.2, gain: 0.5 * v, type: "bandpass", freq: 1900, q: 0.7 }); tone(t, { type: "triangle", from: 210, to: 160, glide: 0.08, dur: 0.12, gain: 0.35 * v }); },
+    hat: (t, v) => noiseHit(t, { dur: 0.045, gain: 0.22 * v, type: "highpass", freq: 7500 }),
+    crash: (t, v) => noiseHit(t, { dur: 1.6, gain: 0.22 * v, type: "highpass", freq: 5200, attack: 0.004 }),
+    bass: (t, v, midi, dur) => {
+      const f = 440 * Math.pow(2, (midi - 69) / 12), o1 = ac.createOscillator(), o2 = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
+      o1.type = "sawtooth"; o1.frequency.value = f; o2.type = "sine"; o2.frequency.value = f;
+      lp.type = "lowpass"; lp.Q.value = 2; lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(260, t + 0.25);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.42 * v, t + 0.008); g.gain.exponentialRampToValueAtTime(0.2 * v, t + 0.3);
+      o1.connect(lp); o2.connect(lp); lp.connect(g).connect(bandBus); o1.start(t); o2.start(t);
+      held(t, [o1, o2], g, t + dur, 0.12);
+    },
+    pad: (t, v, midi, dur) => {                         // strings: detuned saws, soft and slow
+      const f = 440 * Math.pow(2, (midi - 69) / 12), lp = ac.createBiquadFilter(), g = ac.createGain(), nodes = [];
+      lp.type = "lowpass"; lp.frequency.value = 1500; lp.Q.value = 0.3;
+      for (const d of [-7, 6]) { const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = f; o.detune.value = d; o.connect(lp); o.start(t); nodes.push(o); }
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.06 * v, t + 0.35);
+      lp.connect(g).connect(bandBus);
+      held(t, nodes, g, t + dur, 0.5);
+    },
+  };
+  function band(kind, when, vel = 1, midi = 0, dur = 0) { if (ac && bandBus && BAND[kind]) BAND[kind](Math.max(ac.currentTime, when), vel, midi, dur); }
+  function bandStop() {
+    if (!ac) return;
+    const t = ac.currentTime;
+    bandVoices.forEach(v => { try { v.g.gain.cancelScheduledValues(t); v.g.gain.setTargetAtTime(0.0001, t, 0.05); v.nodes.forEach(n => n.stop(t + 0.3)); } catch (e) {} });
+    bandVoices.clear();
+  }
+
+  window.KeyfallSound = { init, noteOn, noteOff, sfx, band, bandStop, get loaded() { return buffers.size; }, total: RECORDED.length };
 })();

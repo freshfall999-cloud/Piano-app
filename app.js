@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), fx3d: $("fx3d"), look: $("look"), sharp: $("sharp"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), fx3d: $("fx3d"), look: $("look"), sharp: $("sharp"), band: $("band"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -179,6 +179,79 @@
     const handy = playable(uniq);
     return { def, notes: handy, end, beat, bars: barList, pedal };
   }
+  // ---------- The band behind you: drums, bass and strings that follow the song's beat and chords ----------
+  // The bars come from the song (a regular grid of its usual bar length, after any pick-up); the chords from its
+  // notes (every half bar in 4/4, every bar otherwise), with the lowest note sounding as the bass.
+  function planBand(song, style) {
+    if (!style || style === "off" || !song || !song.notes.length) return [];
+    const beat = song.beat, notes = song.notes, end = song.end, ev = [];
+    const starts = [0, ...song.bars], lens = starts.slice(1).map((b, i) => b - starts[i]).filter(x => x > beat * 0.9).sort((a, b) => a - b);
+    const per = Math.max(2, Math.min(6, Math.round((lens.length ? lens[lens.length >> 1] : beat * 4) / beat)));
+    const barLen = per * beat, anchor = starts.length > 1 && starts[1] - starts[0] < barLen * 0.9 ? starts[1] : 0;
+    const grid = [];
+    for (let t = anchor - Math.floor(anchor / barLen + 1e-6) * barLen; t < end - beat * 0.5; t += barLen) grid.push(t);
+    const add = (t, k, v, m = 0, d = 0) => { if (t >= -1e-6 && t < end + beat) ev.push({ t, k, v, m, d }); };
+    // drums
+    grid.forEach((bt, i) => {
+      const fill = i % 8 === 7 && per >= 3 && i < grid.length - 1;
+      if (i % 4 === 0) add(bt, "crash", i === 0 ? 0.8 : 0.55);
+      for (let h = 0; h < per * 2; h++) {
+        const t = bt + h * beat / 2;
+        if (fill && h >= per * 2 - 2) continue;
+        add(t, "hat", h % 2 ? 0.45 : 0.7);
+      }
+      if (per === 3) { add(bt, "kick", 1); add(bt + beat, "snare", 0.35); add(bt + 2 * beat, "snare", 0.35); }
+      else {
+        const half = Math.floor(per / 2);
+        add(bt, "kick", 1); add(bt + half * beat, "snare", 0.85);
+        if (per === 4) { add(bt + 2 * beat, "kick", 0.9); add(bt + 3 * beat, "snare", 0.85); if (i % 2) add(bt + 2.5 * beat, "kick", 0.6); }
+        else if (per > 4) add(bt + (per - 1) * beat, "snare", 0.6);
+      }
+      if (fill) for (let q = 0; q < 4; q++) add(bt + (per - 1) * beat + q * beat / 4, "snare", 0.45 + q * 0.15);
+    });
+    if (grid.length) { const last = grid[grid.length - 1] + barLen; if (last < end + beat) { add(last, "crash", 0.8); add(last, "kick", 1); } }
+    if (style === "drums") return ev.sort((a, b) => a.t - b.t);
+    // chords
+    const spanLen = per === 4 ? 2 * beat : barLen, spans = [];
+    grid.forEach(bt => { for (let a = bt; a < bt + barLen - 1e-6 && a < end; a += spanLen) spans.push([a, Math.min(a + spanLen, end)]); });
+    let prev = null;
+    for (const [a, b] of spans) {
+      const here = notes.filter(n => n.start < b - 0.01 && n.start + n.dur > a + 0.01);
+      if (!here.length) { if (!prev) continue; }
+      else {
+        const early = here.filter(n => n.start <= a + beat * 0.5), pool = early.length ? early : here;   // the bass: lowest note at the start
+        const low = pool.reduce((x, y) => y.midi < x.midi ? y : x);
+        prev = chordOf(here, a, b, low.midi % 12);
+      }
+      const c = prev, len = b - a;
+      let root = 36 + c.root; if (root > 43) root -= 12;
+      add(a, "bass", 0.9, root, Math.min(len, beat) * 0.92);
+      for (let k = 1; k < Math.round(len / beat); k++) add(a + k * beat, "bass", 0.7, k % 2 ? root + 7 : root, beat * 0.88);
+      if (style === "full") for (const pc of c.pcs) {
+        let m = pc + 48; while (m < 52) m += 12;
+        add(a, "pad", 0.9, m, len * 0.98);
+      }
+    }
+    return ev.sort((a, b) => a.t - b.t);
+  }
+  let band = { events: [], i: 0 };
+  const bandMuted = () => mic.on && !midiIn.names.length;      // the microphone would hear the band and count it
+  function bandTick() {
+    if (!band.events.length || state !== "running" || time < -0.2 || !window.KeyfallSound || bandMuted()) return;
+    const sp = ui.speed.value / 100, ahead = mode() === "practice" ? 0.02 : 0.12 * sp, a = audio();
+    if (!a) return;
+    while (band.i < band.events.length && band.events[band.i].t <= time + ahead) {
+      const e = band.events[band.i++];
+      if (e.t < time - 0.08) continue;                    // (skipped over)
+      KeyfallSound.band(e.k, a.currentTime + Math.max(0, (e.t - time) / sp), e.v, e.m, e.d / sp);
+    }
+  }
+  function newBand() {
+    band = { events: planBand(song, ui.band.value), i: 0 };
+    while (band.i < band.events.length && band.events[band.i].t < time - 0.05) band.i++;
+    $("bandNote").hidden = !(band.events.length && bandMuted());
+  }
+
   // When the sustain pedal is down: [[down, up], ...] in song time. From the file (MIDI pedal, or the pedal
   // Transkun hears in a recording), or for built-in pieces that are played with pedal: re-pedalled every bar
   // (or every beat), lifted at each bar line and pressed again just after the new bass note.
@@ -545,6 +618,8 @@
     LOW = Math.min(48, Math.floor(lo / 12) * 12); HIGH = Math.max(84, Math.ceil(hi / 12) * 12);
     layout();
     time = -2; score = streak = bestStreak = hits = perfects = misses = wrong = 0;
+    if (window.KeyfallSound) KeyfallSound.bandStop();
+    newBand();
     autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear();
     state = "idle"; ui.start.textContent = "Start"; ui.results.hidden = true;
     ui.restart.hidden = true; ui.pause.hidden = true;
@@ -561,6 +636,7 @@
   }
   function pause() {
     state = "paused"; ui.start.textContent = "Resume"; ui.restart.hidden = false; ui.pause.hidden = true;
+    if (window.KeyfallSound) KeyfallSound.bandStop();
     ui.ready.hidden = !!drill || !!train || !!rec || !$("home").hidden;
     autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear();
   }
@@ -2435,6 +2511,7 @@
       }
     }
     step(dt); last = now;
+    bandTick();
     glitter(dt);
     draw();
     requestAnimationFrame(frame);
@@ -3189,6 +3266,8 @@
   };
   try { if (localStorage.getItem("keyfall:pedal") === "off") ui.pedal.value = "off"; } catch (e) {}
   ui.pedal.onchange = () => { try { localStorage.setItem("keyfall:pedal", ui.pedal.value); } catch (e) {} reset(); };
+  try { const v = localStorage.getItem("keyfall:band"); if (v) ui.band.value = v; } catch (e) {}
+  ui.band.onchange = () => { try { localStorage.setItem("keyfall:band", ui.band.value); } catch (e) {} newBand(); };
   ui.level.onchange = () => { try { localStorage.setItem("keyfall:level", ui.level.value); } catch (e) {} reset(); };
   ui.view.onchange = () => { try { localStorage.setItem("keyfall:view", ui.view.value); } catch (e) {} sheet = null; layout(); };
   ui.ignoreTalk.onchange = () => { try { localStorage.setItem("keyfall:ignoreTalk", ui.ignoreTalk.checked ? "1" : "0"); } catch (e) {} };
