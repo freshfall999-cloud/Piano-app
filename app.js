@@ -29,18 +29,53 @@
   // ---------- Audio ----------
   let ac = null, master = null;
   const voices = new Map();
-  function audio() {
-    if (!ac) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return null;
-      ac = new AC();
-      master = ac.createDynamicsCompressor();
-      master.connect(ac.destination);
-      if (window.KeyfallSound) KeyfallSound.init(ac, master);
+  // iPads stop a page's sound now and then: a call, Siri, another app, the screen locking, the microphone turning on
+  // or off, a cable plugged in. The sound is then "interrupted" or "suspended", or (an iPad bug) says it's running
+  // but is stuck. So: wake it at every touch and when the page comes back, and if it won't wake, start a new one.
+  function makeAudio() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    const old = ac;
+    try { ac = new AC({ latencyHint: "interactive" }); } catch (e) { ac = new AC(); }
+    master = ac.createDynamicsCompressor();
+    master.connect(ac.destination);
+    voices.clear(); sampled.clear();
+    if (window.KeyfallSound) KeyfallSound.init(ac, master);
+    ac.onstatechange = () => { if (ac.state !== "running" && ac.state !== "closed" && !document.hidden) setTimeout(() => wakeAudio(false), 200); };
+    audioCheck.t = -1; audioCheck.stuck = 0;
+    if (old) {
+      try { if (old.state !== "closed") old.close().catch(() => {}); } catch (e) {}
+      if (mic.on) toggleMic().then(() => toggleMic());   // the microphone was wired to the old sound: connect it again
     }
-    if (ac.state === "suspended") ac.resume();
     return ac;
   }
+  function audio() {
+    if (!ac || ac.state === "closed") makeAudio();
+    if (ac && ac.state !== "running") { try { const r = ac.resume(); if (r && r.catch) r.catch(() => {}); } catch (e) {} }
+    return ac;
+  }
+  const audioCheck = { t: -1, stuck: 0, failed: false };
+  function wakeAudio(gesture) {
+    if (!ac) return;
+    if (gesture && (audioCheck.failed || ac.state === "closed")) { audioCheck.failed = false; makeAudio(); }   // a touch may start a new one
+    if (ac.state === "running") return;
+    const was = ac;
+    try { const r = ac.resume(); if (r && r.catch) r.catch(() => {}); } catch (e) {}
+    setTimeout(() => { if (ac === was && ac.state !== "running") { audioCheck.failed = true; if (gesture) makeAudio(); } }, 500);
+  }
+  ["pointerdown", "touchend", "keydown"].forEach(t => window.addEventListener(t, () => wakeAudio(true), { capture: true, passive: true }));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) wakeAudio(false); });
+  window.addEventListener("pageshow", () => wakeAudio(false));
+  setInterval(() => {                                // running, but the clock doesn't move: stuck
+    if (!ac || document.hidden) return;
+    if (ac.state !== "running") { wakeAudio(false); return; }
+    if (ac.currentTime === audioCheck.t) { if (++audioCheck.stuck >= 2) { audioCheck.failed = true; audioCheck.stuck = 0; } }
+    else audioCheck.stuck = 0;
+    audioCheck.t = ac.currentTime;
+  }, 1500);
+  // sound plays even with the iPad's silent switch on, and the microphone's audio mode is undone when it's off
+  const audioMode = type => { if (navigator.audioSession) try { if (navigator.audioSession.type !== type) navigator.audioSession.type = type; } catch (e) {} };
+  audioMode("playback");
   const sampled = new Set();
   function noteOn(midi, vel = 0.8) {
     if (!audio()) return;
@@ -823,7 +858,9 @@
     if (mic.on) {
       mic.stream.getTracks().forEach(t => t.stop());
       if (window.KeyfallML) KeyfallML.stop();
+      try { mic.src && mic.src.disconnect(); } catch (e) {}
       mic.on = false; mic.note = null; ui.micText.textContent = "🎤 Listen: off"; ui.mic.classList.remove("primary");
+      audioMode("playback"); setTimeout(() => wakeAudio(false), 300);
       return;
     }
     if (!audio() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { ui.micText.textContent = "🎤 Mic unsupported"; return; }
@@ -839,7 +876,7 @@
     const want = micWanted();
     // Safari on iPad sometimes lists a USB input but still records the built-in microphone; asking for a
     // play-and-record audio session first helps it switch (WebKit bug 211192)
-    if (want && navigator.audioSession) try { navigator.audioSession.type = "play-and-record"; } catch (e) {}
+    audioMode("play-and-record");
     let stream = null, id = want ? await findMic(want) : "";
     try {
       if (id === null) { stream = await open(""); id = await findMic(want) || ""; }   // names stay hidden until the microphone is allowed
@@ -848,7 +885,8 @@
         try { stream = await open(id); } catch (e) { if (e && e.name === "NotAllowedError") throw e; stream = null; id = ""; }
       }
       if (!stream) stream = await open("");
-    } catch (e) { ui.micText.textContent = "🎤 Mic blocked"; return; }
+    } catch (e) { ui.micText.textContent = "🎤 Mic blocked"; audioMode("playback"); return; }
+    setTimeout(() => wakeAudio(false), 300);
     mic.stream = stream;
     mic.line = !!id && !BUILT_IN.test(want);           // a cable from the piano: clean sound, nobody talking into it
     const track = mic.stream.getAudioTracks()[0], st = track && track.getSettings ? track.getSettings() : {};
@@ -3149,5 +3187,5 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
   requestAnimationFrame(frame);
 
-  window.__keyfall = { held: () => [...autoDown.keys()].length, get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, loadSong, playable, get stats() { return { score, hits, misses, wrong }; } };
+  window.__keyfall = { held: () => [...autoDown.keys()].length, get sheet() { return sheet; }, mic, press: (m) => { press(m, 0.8); setTimeout(() => release && release(m), 150); }, get drill() { return drill; }, get train() { return train; }, get calib() { return calib; }, get tmpl() { return tmpl; }, get state() { return state; }, get time() { return time; }, get song() { return song; }, loadSong, playable, get ac() { return ac; }, get stats() { return { score, hits, misses, wrong }; } };
 })();

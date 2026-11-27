@@ -57,9 +57,9 @@
     const c = ac.createConvolver(); c.buffer = ir; return c;
   }
 
-  function init(context, destination) {
-    if (ac) return;
-    ac = context; out = destination;
+  function init(context, destination) {             // again with a new context when the app had to restart the sound
+    if (ac === context) return;
+    ac = context; out = destination; voices.clear();
     // the piano: a little warmth in the low end, the direct sound, and the hall
     pianoBus = ac.createGain(); pianoBus.gain.value = 0.9;
     const warm = ac.createBiquadFilter(); warm.type = "lowshelf"; warm.frequency.value = 200; warm.gain.value = 2.5;
