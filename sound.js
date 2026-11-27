@@ -7,7 +7,7 @@
   for (let m = 21; m <= 108; m += 3) RECORDED.push(m);
   const fileOf = m => `samples/${NAMES[m % 12]}${Math.floor(m / 12) - 1}.mp3`;
 
-  let ac = null, out = null, sfxBus = null, reverb = null;
+  let ac = null, out = null, sfxBus = null, reverb = null, pianoBus = null;
   const buffers = new Map(), voices = new Map();
   let loading = false;
 
@@ -42,9 +42,29 @@
     const c = ac.createConvolver(); c.buffer = ir; return c;
   }
 
+  // a concert hall for the piano: a short gap, then a long, darkening, stereo tail (like the piano videos)
+  function makeHall(seconds = 2.8, preDelay = 0.022) {
+    const sr = ac.sampleRate, len = Math.round(sr * seconds), pre = Math.round(sr * preDelay), ir = ac.createBuffer(2, len, sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      let y = 0;
+      for (let i = pre; i < len; i++) {
+        const f = (i - pre) / (len - pre), a = 0.85 - 0.75 * f;          // the high notes die away first
+        y += a * ((Math.random() * 2 - 1) - y);
+        d[i] = y * Math.exp(-f * 6.2) * (i - pre < sr * 0.004 ? (i - pre) / (sr * 0.004) : 1);
+      }
+    }
+    const c = ac.createConvolver(); c.buffer = ir; return c;
+  }
+
   function init(context, destination) {
     if (ac) return;
     ac = context; out = destination;
+    // the piano: a little warmth in the low end, the direct sound, and the hall
+    pianoBus = ac.createGain(); pianoBus.gain.value = 0.9;
+    const warm = ac.createBiquadFilter(); warm.type = "lowshelf"; warm.frequency.value = 200; warm.gain.value = 2.5;
+    const hall = makeHall(), hallWet = ac.createGain(); hallWet.gain.value = 0.85;
+    pianoBus.connect(warm); warm.connect(out); warm.connect(hall); hall.connect(hallWet).connect(out);
     reverb = makeReverb();
     const wet = ac.createGain(); wet.gain.value = 0.35;
     reverb.connect(wet).connect(out);
@@ -64,18 +84,22 @@
     const s = nearest(m);
     if (s === null) return false;           // not loaded yet: the caller falls back to its own synth
     noteOff(m, 0.03);
-    const t = ac.currentTime, src = ac.createBufferSource(), g = ac.createGain();
+    const t = ac.currentTime, src = ac.createBufferSource(), g = ac.createGain(), tone = ac.createBiquadFilter();
     src.buffer = buffers.get(s);
     src.playbackRate.value = Math.pow(2, (m - s) / 12);
     const level = 0.25 + 0.75 * Math.pow(vel, 1.4);
     g.gain.setValueAtTime(level, t);
-    src.connect(g).connect(out);
+    // soft notes are darker, loud ones bright (as on a real piano); low notes a little to the left, high to the right
+    tone.type = "lowpass"; tone.Q.value = 0.5; tone.frequency.setValueAtTime(1400 + 15000 * vel * vel, t);
+    let node = src.connect(tone).connect(g);
+    if (ac.createStereoPanner) { const pan = ac.createStereoPanner(); pan.pan.value = Math.max(-0.4, Math.min(0.4, (m - 64) / 60)); node = node.connect(pan); }
+    node.connect(pianoBus);
     src.start(t);
     voices.set(m, { src, g });
     src.onended = () => { if (voices.get(m) && voices.get(m).src === src) voices.delete(m); };
     return true;
   }
-  function noteOff(m, release = 0.18) {
+  function noteOff(m, release = 0.3) {
     const v = voices.get(m);
     if (!v) return;
     voices.delete(m);

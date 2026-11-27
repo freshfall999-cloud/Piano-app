@@ -490,7 +490,7 @@
   // ---------- Game state ----------
   let song = null, state = "idle";      // idle | running | paused | done
   let time = 0, score = 0, streak = 0, bestStreak = 0, hits = 0, perfects = 0, misses = 0, wrong = 0;
-  const down = new Set(), autoDown = new Map(), flashes = [];
+  const down = new Set(), autoDown = new Map(), pedalRing = new Set(), flashes = [];
   let rec = null;                        // ⏺ recording your own song: { t0, notes, open, pedal, pedalAt }
 
   const mode = () => ui.mode.value;
@@ -510,7 +510,7 @@
     LOW = Math.min(48, Math.floor(lo / 12) * 12); HIGH = Math.max(84, Math.ceil(hi / 12) * 12);
     layout();
     time = -2; score = streak = bestStreak = hits = perfects = misses = wrong = 0;
-    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear();
+    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear();
     state = "idle"; ui.start.textContent = "Start"; ui.results.hidden = true;
     ui.restart.hidden = true; ui.pause.hidden = true;
     const def = SONGS[ui.song.value];
@@ -527,7 +527,7 @@
   function pause() {
     state = "paused"; ui.start.textContent = "Resume"; ui.restart.hidden = false; ui.pause.hidden = true;
     ui.ready.hidden = !!drill || !!train || !!rec || !$("home").hidden;
-    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear();
+    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear();
   }
   function toggle() { state === "running" ? pause() : start(); }
 
@@ -636,14 +636,16 @@
         if (!n.played) {
           n.played = true; n.state = "hit";
           if (!mic.on) noteOn(n.midi, 0.6 * (n.vel ?? 1));                // silent while listening: the microphone would hear it
-          autoDown.set(n.midi, n.start + n.dur * 0.92);
+          autoDown.set(n.midi, n.start + n.dur * 0.92); pedalRing.delete(n.midi);
         }
       } else if (mode() === "play" && n.state === "pending" && time > n.start + lateBy()) {
         n.state = "miss"; misses++; streak = 0; updateHud();
       }
     }
+    // a note's key comes up when the note ends; with the pedal down only its sound rings on, until the pedal lifts
     const held = pedalDown(time);
-    autoDown.forEach((end, m) => { if (time >= end && !held) { autoDown.delete(m); if (!down.has(m)) noteOff(m); } });
+    autoDown.forEach((end, m) => { if (time >= end) { autoDown.delete(m); if (held) pedalRing.add(m); else if (!down.has(m)) noteOff(m); } });
+    if (!held && pedalRing.size) { pedalRing.forEach(m => { if (!down.has(m) && !autoDown.has(m)) noteOff(m); }); pedalRing.clear(); }
     if (time > song.end + 0.8) finish();
   }
 
@@ -1389,6 +1391,10 @@
     g.white.addColorStop(0, "#d9dce6"); g.white.addColorStop(0.06, "#ffffff"); g.white.addColorStop(0.85, "#f1f2f7"); g.white.addColorStop(1, "#c9ccd8");
     g.black = ctx.createLinearGradient(0, kbTop, 0, kbTop + (H - kbTop) * 0.62);
     g.black.addColorStop(0, "#0a0b10"); g.black.addColorStop(0.1, "#2a2d39"); g.black.addColorStop(0.88, "#14161d"); g.black.addColorStop(1, "#050608");
+    g.lip = ctx.createLinearGradient(0, H - 10, 0, H);         // the white keys' front edge
+    g.lip.addColorStop(0, "#d4d7e0"); g.lip.addColorStop(1, "#9ea2b0");
+    g.face = ctx.createLinearGradient(0, kbTop + (H - kbTop) * 0.5, 0, kbTop + (H - kbTop) * 0.64);   // the black keys' sloped front
+    g.face.addColorStop(0, "#2c2f3a"); g.face.addColorStop(1, "#4a4e5c");
     g.shade = ctx.createLinearGradient(0, kbTop, 0, kbTop + 14);
     g.shade.addColorStop(0, "rgba(0,0,0,.45)"); g.shade.addColorStop(1, "rgba(0,0,0,0)");
     return g;
@@ -2112,9 +2118,12 @@
   $("printBtn").onclick = () => { if (song) openPrintView(); };
   window.__keyfallPrint = { printPages, pdfFromPages };              // (for automated tests)
 
+  const keyDepth = new Map();                        // how far down each key is (0 up … 1 down), eased
+  let lastDraw = 0, drawDt = 0;
   function draw() {
     if (!grad) grad = gradients();
     const now = performance.now();
+    drawDt = lastDraw ? Math.min(0.05, (now - lastDraw) / 1000) : 0.016; lastDraw = now;
     ctx.fillStyle = red ? "#000" : grad.bg; ctx.fillRect(0, 0, W, kbTop);
     // lane guides at each C
     ctx.strokeStyle = red ? "rgba(255,255,255,.045)" : "rgba(127,212,255,.06)"; ctx.lineWidth = 1;
@@ -2218,25 +2227,44 @@
       const on = down.has(k.midi) || autoDown.has(k.midi) || mic.note === k.midi;
       const learned = train && train.data.keys[k.midi];
       const flash = wrongs.some(w => w.midi === k.midi && now - w.t < 350);
-      const lit = k.midi === badKey || flash ? (red ? "#b0b4c8" : "#ff6b7d") : target.has(k.midi) ? (pass ? "#2e9d5f" : "#8fe9b0") : on ? (red ? (pass ? "#c8102e" : "#ff4a64") : pass ? "#1f86c9" : "#7ccdff")
+      // a played key moves down like a real one (no colour); hints still tint it: green = play this, red/grey = wrong key
+      let d = keyDepth.get(k.midi) || 0;
+      const want = on ? 1 : 0;
+      if (d !== want) { d += (want - d) * Math.min(1, drawDt / 0.03); if (Math.abs(want - d) < 0.03) d = want; keyDepth.set(k.midi, d); }
+      const hint = k.midi === badKey || flash ? (red ? "#b0b4c8" : "#ff6b7d") : target.has(k.midi) ? (pass ? "#2e9d5f" : "#8fe9b0")
         : learned ? (pass ? "#34507a" : "#cfe2fb") : null;
-      const kx = k.x + (pass ? 0 : 1), kw = k.w - (pass ? 0 : 2), kh = k.h - (on && !pass ? 0 : 3);
-      if (lit && (on || target.has(k.midi))) { ctx.shadowColor = lit; ctx.shadowBlur = 14; }
-      ctx.fillStyle = lit ? keyFill(lit, k) : pass ? grad.black : grad.white;
-      rrect(kx, kbTop - 2, kw, kh + 2, pass ? 3 : 5); ctx.fill();
-      ctx.shadowBlur = 0;
-      if (pass) {                                        // black keys: a polished bevel catching the light
-        ctx.fillStyle = "rgba(255,255,255,.13)";
-        rrect(kx + kw * 0.14, kbTop + 4, kw * 0.72, kh * 0.78, 2); ctx.fill();
-      } else if (!lit) {
-        ctx.fillStyle = "rgba(0,0,0,.05)"; ctx.fillRect(kx + kw - 1, kbTop, 1, kh);
+      const kx = k.x + (pass ? 0 : 1), kw = k.w - (pass ? 0 : 2);
+      if (!pass) {
+        const top = kbTop - 2 + d * 3, bottom = kbTop + k.h - 3 + d * 2, lip = 6 * (1 - d);   // the front edge shows until the key is down
+        if (hint && target.has(k.midi)) { ctx.shadowColor = hint; ctx.shadowBlur = 14; }
+        ctx.fillStyle = hint ? keyFill(hint, k) : grad.white;
+        rrect(kx, top, kw, bottom - top, 5); ctx.fill();
+        ctx.shadowBlur = 0;
+        if (lip > 0.5) { ctx.fillStyle = grad.lip; ctx.fillRect(kx + 1, bottom - lip, kw - 2, lip); }
+        if (d > 0) {                                     // down between its neighbours: in their shadow at the top and sides
+          const sh = ctx.createLinearGradient(0, top, 0, top + k.h * 0.45);
+          sh.addColorStop(0, `rgba(0,0,0,${0.42 * d})`); sh.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = sh; ctx.fillRect(kx, top, kw, k.h * 0.45);
+          ctx.fillStyle = `rgba(0,0,0,${0.22 * d})`; ctx.fillRect(kx, top, 2, bottom - top); ctx.fillRect(kx + kw - 2, top, 2, bottom - top);
+        } else if (!hint) { ctx.fillStyle = "rgba(0,0,0,.05)"; ctx.fillRect(kx + kw - 1, kbTop, 1, k.h - 3); }
+      } else {
+        const bh = k.h + d * 2, face = bh * (0.11 - 0.07 * d);                  // the sloped front shrinks as it goes down
+        ctx.fillStyle = "rgba(0,0,0,.45)"; rrect(kx - 1.5, kbTop - 2, kw + 3, bh + 4, 3); ctx.fill();   // its shadow on the white keys
+        ctx.fillStyle = hint ? keyFill(hint, k) : grad.black;
+        rrect(kx, kbTop - 2 + d * 2, kw, bh, 3); ctx.fill();
+        if (!hint) {
+          ctx.fillStyle = `rgba(255,255,255,${0.13 - 0.07 * d})`;      // a polished bevel catching the light
+          rrect(kx + kw * 0.14, kbTop + 4 + d * 3, kw * 0.72, (bh - face) * 0.82, 2); ctx.fill();
+          ctx.fillStyle = grad.face; ctx.fillRect(kx + 1, kbTop - 2 + d * 2 + bh - face, kw - 2, face);
+        }
+        if (d > 0) { ctx.fillStyle = `rgba(0,0,0,${0.3 * d})`; rrect(kx, kbTop - 2 + d * 2, kw, bh, 3); ctx.fill(); }
       }
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
       if (!text || k.w < 11) continue;
       ctx.font = `${Math.max(9, Math.min(13, k.w * 0.55))}px system-ui, sans-serif`;
       ctx.fillStyle = pass ? "#9aa0b8" : "#5a6078";
-      ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10);
+      ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10 + (keyDepth.get(k.midi) || 0) * 2);
     }
     ctx.fillStyle = grad.shade; ctx.fillRect(0, kbTop, W, 14);     // shadow under the rail
     // the hit line: a glowing rail the notes land on
