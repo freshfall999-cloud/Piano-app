@@ -2359,9 +2359,10 @@
   const MIDI_HELP = CABLE + " A Bluetooth MIDI piano can connect without a cable.";
   const NO_KEYS_HELP = "The keys only reach the app if the piano sends them out over USB. On a stage piano with zones or parts, " +
     "check that the part you play is set to send to USB (external), not only to its own sound. ";
-  const ROLAND_HELP = "<br><b>Roland RD-2000 / RD-2000 EX:</b> use the square <b>USB COMPUTER</b> port (not the flat USB MEMORY one). " +
-    "In the piano's <b>MENU</b> → <b>SYSTEM</b> settings, set <b>USB Driver</b> to <b>GENERIC</b> (the iPad can't use VENDOR), " +
-    "then press <b>WRITE</b> to save, <b>turn the piano off and on again</b>, and tap Look again.";
+  const ROLAND_HELP = "<br><b>Roland RD-2000 / RD-2000 EX:</b> 1) Use the square <b>USB COMPUTER</b> port (not USB MEMORY) and a data cable, not a charge-only one. " +
+    "2) Press <b>MENU</b>, choose <b>System</b>, press <b>ENTER</b>, move to <b>USB Driver</b> and set it to <b>GENERIC</b> (the iPad can't use VENDOR), press <b>WRITE</b>, " +
+    "then <b>turn the piano off and on again</b>. 3) The zone you play must be <b>EXT</b>: hold <b>SHIFT</b> and press that zone's <b>INT/EXT</b> button until it lights " +
+    "<b>green</b> (unlit or red sends nothing). 4) Tap Look again here.";
   const MIDI_HELP_NONE = "Two ways round it:<br>• <b>Best:</b> get the free <b>MIDIWeb Browser</b> app (by 5of12) from the App Store, open this app's address in it, " +
     "and plug the piano in. That browser passes the piano's keys to web pages, by cable or Bluetooth. " + CABLE + "<br>• Or let the app <b>hear</b> the piano " +
     "through the cable: some digital pianos (for example Roland FP-30X, Yamaha P-225) also send their sound over USB. Plug it in, pick it under " +
