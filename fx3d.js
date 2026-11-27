@@ -69,7 +69,7 @@ export function createFx(host) {
     g.fillStyle = r; g.fillRect(0, 0, 128, 128);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   })();
-  const ringGeo = new THREE.RingGeometry(0.93, 1, 72);
+  const ringGeo = new THREE.RingGeometry(0.97, 1, 96);
   const flashGeo = new THREE.PlaneGeometry(1, 1);
   const pool = [];                                         // rings and flashes, reused
   function piece(kind) {
@@ -111,24 +111,19 @@ export function createFx(host) {
       vel[k * 3] = Math.sin(a) * up * 0.55;
       vel[k * 3 + 1] = Math.cos(a) * up;
       vel[k * 3 + 2] = (0.2 + Math.random()) * (big ? 520 : 380);   // out of the screen, toward you
-      const white = Math.random() < 0.35;
+      const white = Math.random() < 0.22;
       col[k * 3] = white ? 1 : c.r; col[k * 3 + 1] = white ? 1 : c.g; col[k * 3 + 2] = white ? 1 : c.b;
-      born[k] = now; life[k] = 0.5 + Math.random() * (big ? 0.7 : 0.45);
-      base[k] = 9 + Math.random() * (big ? 16 : 10); glitter[k] = 0;
+      born[k] = now; life[k] = 0.45 + Math.random() * (big ? 0.65 : 0.4);
+      base[k] = 5 + Math.random() * (big ? 11 : 7); glitter[k] = 0;
     }
     sprinkle(wx, wy, c, keyW, big ? 90 : 50, 1.3);
-    // a ring of light spreading over the keys (lying flat, seen at an angle)
-    const ring = piece("ring");
-    ring.mesh.material.color.copy(c);
-    ring.mesh.position.set(wx, wy - 4, 0);
-    ring.mesh.rotation.set(-1.15, 0, 0);
-    ring.t0 = now; ring.dur = big ? 0.75 : 0.55; ring.r = keyW * (big ? 4.2 : 3);
+    if (big) sprinkle(wx, wy, new THREE.Color(1, 1, 1), keyW * 3, 60, 1.8);   // a streak: an extra fountain of white glitter
     // and a quick glow where the key was struck
     const fl = piece("flash");
     fl.mesh.material.color.copy(c);
     fl.mesh.position.set(wx, wy, 1);
     fl.mesh.rotation.set(0, 0, 0);
-    fl.t0 = now; fl.dur = big ? 0.45 : 0.32; fl.r = keyW * (big ? 5 : 3.4);
+    fl.t0 = now; fl.dur = big ? 0.4 : 0.28; fl.r = keyW * (big ? 3.6 : 2.4);
     kick();
   }
 
@@ -186,7 +181,7 @@ export function createFx(host) {
       if (a >= 1) { p.mesh.visible = false; continue; }
       alive++;
       const e = 1 - Math.pow(1 - a, 3);
-      if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * 0.6; }
+      if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a) * 0.5; }
       else { const r = p.r * (0.6 + 0.6 * e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a); }
     }
     for (const n of ["position", "color", "alpha", "size"]) geo.attributes[n].needsUpdate = true;

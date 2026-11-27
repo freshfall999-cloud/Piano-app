@@ -580,7 +580,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=4").then(m => {
+    fxLoading = import("./fx3d.js?v=5").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H);
@@ -2157,12 +2157,21 @@
   window.__keyfallPrint = { printPages, pdfFromPages };              // (for automated tests)
 
   const keyDepth = new Map();                        // how far down each key is (0 up … 1 down), eased
-  let lastDraw = 0, drawDt = 0;
+  let lastDraw = 0, drawDt = 0, ambient = 0;
   function draw() {
     if (!grad) grad = gradients();
     const now = performance.now();
     drawDt = lastDraw ? Math.min(0.05, (now - lastDraw) / 1000) : 0.016; lastDraw = now;
     ctx.fillStyle = red ? "#000" : grad.bg; ctx.fillRect(0, 0, W, kbTop);
+    if (red) {                                        // light from the playing keys spills over the dark stage
+      const n = sounding().size;
+      ambient += ((n ? Math.min(1, 0.45 + n * 0.15) : 0) - ambient) * Math.min(1, drawDt * (n ? 10 : 2.5));
+      if (ambient > 0.01) {
+        const am = ctx.createLinearGradient(0, kbTop, 0, kbTop - kbTop * 0.4);
+        am.addColorStop(0, `rgba(255,36,72,${0.16 * ambient})`); am.addColorStop(1, "rgba(255,36,72,0)");
+        ctx.fillStyle = am; ctx.fillRect(0, kbTop * 0.6, W, kbTop * 0.4);
+      }
+    }
     // lane guides at each C
     ctx.strokeStyle = red ? "rgba(255,255,255,.045)" : "rgba(127,212,255,.06)"; ctx.lineWidth = 1;
     if (!(song && !drill && !train && !rec && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
@@ -2234,8 +2243,8 @@
           const txt = "Play " + g.map(n => nm(n.midi)).join(" + ");
           ctx.font = "700 20px system-ui, sans-serif";
           const tw = ctx.measureText(txt).width + 32, cx = W / 2, cy = 34;
-          ctx.fillStyle = "rgba(27,30,42,.92)"; rrect(cx - tw / 2, cy - 22, tw, 40, 20); ctx.fill();
-          ctx.strokeStyle = "#5fd38a"; ctx.lineWidth = 2; ctx.stroke();
+          ctx.fillStyle = red ? "rgba(10,14,12,.88)" : "rgba(27,30,42,.92)"; rrect(cx - tw / 2, cy - 22, tw, 40, 20); ctx.fill();
+          ctx.shadowColor = "#5fd38a"; ctx.shadowBlur = 12; ctx.strokeStyle = "#5fd38a"; ctx.lineWidth = 1.5; ctx.stroke(); ctx.shadowBlur = 0;
           ctx.fillStyle = "#a8f0c0"; ctx.textAlign = "center"; ctx.fillText(txt, cx, cy + 5);
         }
       }
@@ -2310,15 +2319,19 @@
     ctx.shadowColor = rail; ctx.shadowBlur = 12;
     ctx.fillStyle = rail; ctx.fillRect(0, kbTop - 3, W, 2);
     ctx.shadowBlur = 0;
-    // a flare of light where each sounding key meets the notes
+    if (red) { ctx.fillStyle = "rgba(255,200,210,.55)"; ctx.fillRect(0, kbTop - 2.5, W, 1); }
+    // a flare of light where each sounding key meets the notes: a hot core and a thin streak along the rail
     ctx.globalCompositeOperation = "lighter";
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
-      const k = keyOf(m), x = k.x + k.w / 2, r = Math.max(18, k.w * 2.4), c = COLORS[m < 60 ? "left" : "right"];
-      const fl = ctx.createRadialGradient(x, kbTop - 3, 0, x, kbTop - 3, r);
-      fl.addColorStop(0, "rgba(255,255,255,.95)"); fl.addColorStop(0.18, red ? "rgba(255,190,200,.75)" : "rgba(200,235,255,.7)");
-      fl.addColorStop(0.45, c + "55"); fl.addColorStop(1, c + "00");
-      ctx.fillStyle = fl; ctx.fillRect(x - r, kbTop - 3 - r, r * 2, r * 2);
+      const k = keyOf(m), x = k.x + k.w / 2, y = kbTop - 3, r = Math.max(14, k.w * 1.7), c = COLORS[m < 60 ? "left" : "right"];
+      const fl = ctx.createRadialGradient(x, y, 0, x, y, r);
+      fl.addColorStop(0, "rgba(255,255,255,.9)"); fl.addColorStop(0.2, red ? "rgba(255,170,185,.6)" : "rgba(200,235,255,.6)");
+      fl.addColorStop(0.5, c + "40"); fl.addColorStop(1, c + "00");
+      ctx.fillStyle = fl; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      const sw = Math.max(60, k.w * 5), st = ctx.createLinearGradient(x - sw, 0, x + sw, 0);
+      st.addColorStop(0, c + "00"); st.addColorStop(0.5, "rgba(255,235,240,.75)"); st.addColorStop(1, c + "00");
+      ctx.fillStyle = st; ctx.fillRect(x - sw, y - 1.5, sw * 2, 3);
     }
     ctx.globalCompositeOperation = "source-over";
     // sparks from hits
@@ -2342,22 +2355,26 @@
     // hit feedback
 
     ctx.textAlign = "center";
-    ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 6;
     for (let i = flashes.length - 1; i >= 0; i--) {
-      const f = flashes[i], a = (now - f.t) / 700;
+      const f = flashes[i], a = (now - f.t) / 750;
       if (a >= 1 || f.midi < LOW || f.midi > HIGH) { flashes.splice(i, 1); continue; }
-      const k = keyOf(f.midi), pop = 1 + 0.25 * Math.max(0, 1 - a * 5);
+      const k = keyOf(f.midi), pop = 1 + 0.3 * Math.max(0, 1 - a * 6), perfect = f.text === "Perfect";
+      const x = Math.min(W - 50, Math.max(50, k.x + k.w / 2)), y = kbTop - 44 - a * 46;
       ctx.globalAlpha = 1 - a * a * a;
-      ctx.font = `800 ${Math.round(20 * pop)}px system-ui, sans-serif`;
-      ctx.fillStyle = f.text === "Perfect" ? "#8dffb0" : "#ffe08a";
-      ctx.fillText(f.text, k.x + k.w / 2, kbTop - 18 - a * 40);
+      ctx.font = `800 ${Math.round(17 * pop)}px system-ui, sans-serif`;
+      ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.strokeText(f.text.toUpperCase(), x, y);
+      ctx.shadowColor = red ? "#ff2448" : perfect ? "#5fd38a" : "#ffb02e"; ctx.shadowBlur = 14;
+      ctx.fillStyle = red ? (perfect ? "#ffffff" : "#ffb3c0") : perfect ? "#c8ffd8" : "#ffe08a";
+      ctx.fillText(f.text.toUpperCase(), x, y); ctx.shadowBlur = 0;
     }
-    if (streak >= 5 && streakAt && now - streakAt < 900) {
-      const a = (now - streakAt) / 900;
-      ctx.globalAlpha = 1 - a;
-      ctx.font = `800 ${Math.round(34 + 10 * (1 - a))}px system-ui, sans-serif`;
-      ctx.fillStyle = "#ffcc4d";
-      ctx.fillText(`🔥 ${streak} in a row`, W / 2, kbTop * 0.42);
+    if (streak >= 5 && streakAt && now - streakAt < 1100) {
+      const a = (now - streakAt) / 1100, pop = 1 + 0.35 * Math.max(0, 1 - a * 5);
+      ctx.globalAlpha = a < 0.75 ? 1 : 1 - (a - 0.75) / 0.25;
+      ctx.font = `900 ${Math.round(40 * pop)}px system-ui, sans-serif`;
+      ctx.shadowColor = red ? "#ff2448" : "#ff9f43"; ctx.shadowBlur = 28;
+      ctx.fillStyle = "#fff"; ctx.fillText(`${streak} IN A ROW`, W / 2, kbTop * 0.4);
+      ctx.shadowBlur = 0; ctx.font = "700 15px system-ui, sans-serif"; ctx.fillStyle = red ? "#ff8a9c" : "#ffcc4d";
+      ctx.fillText("🔥 STREAK", W / 2, kbTop * 0.4 - 46 * pop);
     }
     ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
@@ -2375,8 +2392,10 @@
     // countdown / progress
     if (song && state !== "idle" && !train) {
       if (time < 0 && state === "running") {
-        ctx.font = "bold 64px system-ui, sans-serif"; ctx.fillStyle = "rgba(255,255,255,.25)";
-        ctx.fillText(Math.ceil(-time), W / 2, kbTop / 2);
+        const c = Math.ceil(-time), f = -time - Math.floor(-time);         // each number pops in and fades
+        ctx.font = `900 ${Math.round(70 + 40 * f)}px system-ui, sans-serif`; ctx.globalAlpha = 0.2 + 0.7 * f;
+        ctx.shadowColor = red ? "#ff2448" : "#39b6ff"; ctx.shadowBlur = 30; ctx.fillStyle = "#fff";
+        ctx.fillText(c, W / 2, kbTop / 2); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
       }
 
     }
