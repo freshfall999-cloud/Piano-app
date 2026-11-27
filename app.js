@@ -2330,7 +2330,7 @@
   // key and how hard it was struck. The piano makes its own sound, so the app stays quiet unless asked
   // (a keyboard without speakers). Its sustain pedal holds the app's sound too.
   // Web MIDI: Chrome, Edge, Firefox and Android have it; Safari (iPad, iPhone, Mac) doesn't.
-  const midiIn = { access: null, names: [], pedal: false, held: new Set(), micNoted: false };
+  const midiIn = { access: null, names: [], pedal: false, held: new Set(), micNoted: false, keys: 0, waitTimer: 0, poll: 0 };
   const midiSound = () => $("midiSound").checked;
   function midiStatus() {
     const st = $("midiState"), btn = $("midiConnect"), help = $("midiHelp");
@@ -2344,10 +2344,12 @@
       st.textContent = "Plug your digital piano in (or pair it by Bluetooth), turn it on, then tap Connect.";
       btn.hidden = false; help.innerHTML = MIDI_HELP;
     } else {
-      st.textContent = midiIn.names.length ? "✅ Connected: " + midiIn.names.join(", ") + ". Just play: every key counts, no microphone needed."
-        : "No digital piano found yet. Check the cable and that the piano is on: it connects by itself as soon as it's found.";
-      btn.hidden = !!midiIn.names.length; btn.textContent = "Look again";
-      help.innerHTML = midiIn.names.length ? "" : MIDI_HELP;
+      const silent = midiIn.names.length && !midiIn.keys && midiIn.waitTimer === -1;
+      st.textContent = !midiIn.names.length ? "No digital piano found yet. Check the cable and that the piano is on, then tap Look again."
+        : silent ? "⚠️ Found " + midiIn.names.join(", ") + ", but no keys have arrived from it yet."
+        : "✅ Connected: " + midiIn.names.join(", ") + (midiIn.keys ? ". Just play: every key counts, no microphone needed." : ". Play a key to check it works.");
+      btn.hidden = !!midiIn.names.length && !silent; btn.textContent = "Look again";
+      help.innerHTML = !midiIn.names.length ? MIDI_HELP + ROLAND_HELP : silent ? NO_KEYS_HELP + ROLAND_HELP : "";
     }
     ui.midi.textContent = midiIn.names.length ? "🎹 Piano" : ""; ui.midi.hidden = !midiIn.names.length; ui.midi.className = "stat midi";
     ui.midi.title = midiIn.names.join(", ");
@@ -2355,6 +2357,11 @@
   const CABLE = "Connect the piano's <b>USB</b> port (often labelled “USB to Host”) with a USB cable: on an iPad with a USB-C port through Apple's " +
     "USB-C to USB Adapter, on one with a Lightning port through Apple's Lightning to USB 3 Camera Adapter. Some keyboards need their own power supply.";
   const MIDI_HELP = CABLE + " A Bluetooth MIDI piano can connect without a cable.";
+  const NO_KEYS_HELP = "The keys only reach the app if the piano sends them out over USB. On a stage piano with zones or parts, " +
+    "check that the part you play is set to send to USB (external), not only to its own sound. ";
+  const ROLAND_HELP = "<br><b>Roland RD-2000 / RD-2000 EX:</b> use the square <b>USB COMPUTER</b> port (not the flat USB MEMORY one). " +
+    "In the piano's <b>MENU</b> → <b>SYSTEM</b> settings, set <b>USB Driver</b> to <b>GENERIC</b> (the iPad can't use VENDOR), " +
+    "then press <b>WRITE</b> to save, <b>turn the piano off and on again</b>, and tap Look again.";
   const MIDI_HELP_NONE = "Two ways round it:<br>• <b>Best:</b> get the free <b>MIDIWeb Browser</b> app (by 5of12) from the App Store, open this app's address in it, " +
     "and plug the piano in. That browser passes the piano's keys to web pages, by cable or Bluetooth. " + CABLE + "<br>• Or let the app <b>hear</b> the piano " +
     "through the cable: some digital pianos (for example Roland FP-30X, Yamaha P-225) also send their sound over USB. Plug it in, pick it under " +
@@ -2380,21 +2387,40 @@
       [...down].forEach(release); midiIn.held.clear();
     }
   }
+  let lastMidiEv = null;
+  function onMidi(e) {                                  // listened to two ways (some MIDI browser apps only fire one); each message counts once
+    if (e === lastMidiEv) return; lastMidiEv = e;
+    const d = e && e.data;
+    if (!d || d.length < 1 || (d[0] & 0xf0) === 0xf0) return;   // clock, active sensing, system messages
+    if ((d[0] & 0xf0) === 0x90 && d[2] > 0) {
+      midiIn.keys++;
+      $("midiLast").textContent = "🎹 Key received: " + NAMES[d[1] % 12] + (Math.floor(d[1] / 12) - 1) + (midiIn.keys > 1 ? " (" + midiIn.keys + " so far)" : "") + " – it works!";
+      $("midiLast").hidden = false;
+      if (midiIn.waitTimer) { clearTimeout(midiIn.waitTimer); midiIn.waitTimer = 0; midiStatus(); }
+    }
+    midiMessage(e);
+  }
   function hookMidi() {
     const names = [];
     midiIn.access.inputs.forEach(inp => {
-      inp.onmidimessage = midiMessage;
+      inp.onmidimessage = onMidi;
+      if (!inp.keyfall) { inp.keyfall = true; try { inp.addEventListener("midimessage", onMidi); } catch (e) {} try { inp.open && inp.open(); } catch (e) {} }
       if (inp.state !== "disconnected") names.push((inp.name || "MIDI keyboard").replace(/\s+/g, " ").trim());
     });
     const was = midiIn.names.length;
     midiIn.names = [...new Set(names)];
     if (midiIn.names.length && !was) midiIn.micNoted = false;
+    if (!midiIn.names.length && midiIn.waitTimer) { clearTimeout(midiIn.waitTimer); midiIn.waitTimer = 0; }
+    if (midiIn.names.length && !midiIn.keys && !midiIn.waitTimer)       // no key after 25 s of being found: say what to check
+      midiIn.waitTimer = setTimeout(() => { midiIn.waitTimer = -1; midiStatus(); }, 25000);
+    clearInterval(midiIn.poll); midiIn.poll = 0;
+    if (!midiIn.names.length) midiIn.poll = setInterval(() => midiIn.access && hookMidi(), 3000);   // in case plugging in isn't reported
     midiStatus();
   }
   async function connectMidi(auto) {
-    if (!navigator.requestMIDIAccess || midiIn.access) { midiStatus(); return; }
+    if (!navigator.requestMIDIAccess || (midiIn.access && auto)) { midiStatus(); return; }
     try {
-      midiIn.access = await navigator.requestMIDIAccess({ sysex: false });
+      midiIn.access = await navigator.requestMIDIAccess({ sysex: false });   // asked afresh on "Look again": some MIDI browser apps only list what was plugged in then
       midiIn.access.onstatechange = hookMidi;
       hookMidi();
       try { localStorage.setItem("keyfall:midi", "1"); } catch (e) {}
@@ -2406,6 +2432,7 @@
   $("midiConnect").onclick = () => { audio(); connectMidi(false); };
   try { $("midiSound").checked = localStorage.getItem("keyfall:midiSound") === "1"; } catch (e) {}
   $("midiSound").onchange = () => { try { localStorage.setItem("keyfall:midiSound", $("midiSound").checked ? "1" : "0"); } catch (e) {} };
+  if (navigator.requestMIDIAccess) $("home").querySelector(".cards").after($("pianoBox"));   // a MIDI browser: the piano matters most, show it first
   midiStatus();
   // connect by itself when that won't pop up a question: allowed before, or a browser app that adds MIDI without asking
   (async () => {

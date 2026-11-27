@@ -225,3 +225,5 @@ html.locked body > :not(#gate) { visibility: hidden; }
 .midiconnect { margin: 0 0 12px; }
 #pianoBox .midisound:not([hidden]) { display: block; }
 #midi:not([hidden]) { padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(95,211,138,.5); background: rgba(95,211,138,.12); color: #bff3cf; font-size: 14px; font-weight: 600; white-space: nowrap; }
+
+.midilast { margin: 6px 0; font-weight: 700; color: #7ee08a; }
