@@ -660,22 +660,28 @@
   let streakAt = 0;
   const particles = [], beams = [], wrongs = [];
   // 3D hit effects (three.js), loaded only when switched on; the flat sparks are used otherwise
-  let fx = null, fxLoading = null;
+  let fx = null, fxLoading = null, gpuFailed = false;
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=16").then(m => {
+    // WebGPU where the browser has it (the graphics chip moves and draws every particle); otherwise WebGL
+    const ready = made => {
       fxLoading = null;
-      if (!ui.fx3d.checked) return;
-      fx = m.createFx(canvas); fx.resize(W, H, pixelRatio()); applyFx(false);
-    }).catch(e => { fxLoading = null; console.warn("3D effects unavailable:", e); ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(not available on this device)"; });
+      if (!ui.fx3d.checked || fx) { made.dispose(); return; }
+      fx = made; fx.resize(W, H, pixelRatio()); applyFx(false);
+      $("fx3dNote").textContent = fx.gpu ? "(running on WebGPU)" : navigator.gpu ? "(running on WebGL: WebGPU didn't start here)" : "(running on WebGL: this browser has no WebGPU)";
+    };
+    const webgl = () => import("./fx3d.js?v=16").then(m => ready(m.createFx(canvas)));
+    fxLoading = (navigator.gpu && !gpuFailed
+      ? import("./fxgpu.js?v=1").then(m => m.createFxGPU(canvas)).then(ready, e => { console.warn("WebGPU particles unavailable:", e); gpuFailed = true; return webgl(); })
+      : webgl()).catch(e => { fxLoading = null; console.warn("3D effects unavailable:", e); ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(not available on this device)"; });
   }
   function burst(midi, color, big) {
     if (midi < LOW || midi > HIGH || !keys.length) return;
     const k = keyOf(midi), x = k.x + k.w / 2, now = performance.now();
     beams.push({ x, w: k.w, color, t: now });
     if (reduceMotion) return;
-    if (fx) { try { fx.burst(x, kbTop, color, big, k.w); return; } catch (e) { console.warn("3D effects off:", e); try { fx.dispose(); } catch (e2) {} fx = null; setTimeout(() => setFx(ui.fx3d.checked), 3000); } }
+    if (fx) { try { fx.burst(x, kbTop, color, big, k.w); return; } catch (e) { console.warn("3D effects off:", e); if (fx.gpu) gpuFailed = true; try { fx.dispose(); } catch (e2) {} fx = null; setTimeout(() => setFx(ui.fx3d.checked), 3000); } }
     const n = big ? 160 : 80;
     for (let i = 0; i < n; i++) {
       const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.9, v = 120 + Math.random() * (big ? 320 : 220);
@@ -2696,6 +2702,8 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
+      // WebGPU stopped (the iPad took the graphics chip away, or it never started drawing): carry on with WebGL
+      if (fx && fx.gpu && fx.isLost()) { console.warn("WebGPU particles lost: using WebGL"); gpuFailed = true; try { fx.dispose(); } catch (e) {} fx = null; setFx(ui.fx3d.checked); }
       if (red && FX.wisps && FX.amount > 0 && Math.random() < 5 * dt) spawnWisp(x, k.w);
       if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, m); } catch (e) {} continue; }
       for (let q = Math.floor(260 * FX.amount * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
