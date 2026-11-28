@@ -133,10 +133,10 @@ export function createFx(host) {
   // How the particles look and move (set from the app's Effects settings)
   //   motion: trails (thin curling sparkle trails), smoke (wide, slow, soft), fountain (shoot up and fall back),
   //   embers (flickering, wandering sparks of fire), shock (a ring bursting outward on every hit, light trails)
-  const style = { motion: "trails", color: new THREE.Color("#ffd6de"), amount: 1, size: 1 };
-  function setStyle(o) { if (o.motion) style.motion = o.motion; if (o.color) style.color = new THREE.Color(o.color); if (o.amount != null) style.amount = o.amount; if (o.size != null) style.size = o.size; }
-  function paint(k, bright = 0.8) {                        // exactly the chosen colour (no white mixed in), some a little dimmer
-    const c = style.color, b = bright + Math.random() * (1 - bright);
+  const style = { motion: "trails", color: new THREE.Color("#ffd6de"), amount: 1, size: 1, vivid: 0 };
+  function setStyle(o) { if (o.motion) style.motion = o.motion; if (o.color) style.color = new THREE.Color(o.color); if (o.amount != null) style.amount = o.amount; if (o.size != null) style.size = o.size; if (o.vivid != null) style.vivid = o.vivid; }
+  function paint(k) {                                      // exactly the chosen colour (no white mixed in); when vivid, all at full strength
+    const c = style.color, bright = Math.min(1, 0.8 + 0.1 * style.vivid), b = bright + Math.random() * (1 - bright);
     col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b;
   }
   function spawn(kind, wx, wy, keyW, n) {
@@ -206,7 +206,7 @@ export function createFx(host) {
     raf = 0;
     const now = performance.now() / 1000, dt = Math.min(0.05, now - last); last = now;
     let alive = 0;
-    const drag = Math.pow(0.35, dt), float = Math.pow(0.75, dt);
+    const drag = Math.pow(0.35, dt), float = Math.pow(0.75, dt), lo = Math.min(0.7, 0.1 + 0.25 * style.vivid);   // (vivid: they twinkle without going dim)
     for (let k = 0; k < MAX; k++) {
       if (!life[k]) continue;
       const age = (now - born[k]) / life[k];
@@ -237,7 +237,7 @@ export function createFx(host) {
       }
       if (kind === 2) {
         // bright, crisp points that sparkle (each twinkles at its own pace) and fade near the end
-        alpha[k] = Math.min(1, (1 - age) * 2.2) * Math.min(1, age * 14) * (0.55 + 0.45 * Math.sin(now * (5 + (k % 7)) + k * 2.3));
+        alpha[k] = Math.min(1, (1 - age) * 2.2) * Math.min(1, age * 14) * (lo + (1 - lo) * (0.5 + 0.5 * Math.sin(now * (5 + (k % 7)) + k * 2.3)));
         size[k] = base[k] * (1 - age * 0.25);
         continue;
       }

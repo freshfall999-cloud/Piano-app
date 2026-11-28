@@ -52,7 +52,8 @@ struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) 
     else { a = pow(1.0 - age, 1.2) * min(1.0, age * 14.0); }
     size = p.base * (1.0 - age * 0.3);
   } else {                                                  // crisp points that twinkle, each at its own pace
-    a = min(1.0, (1.0 - age) * 2.2) * min(1.0, age * 14.0) * (0.55 + 0.45 * sin(u.now * (5.0 + f32(ii % 7u)) + k * 2.3));
+    let lo = min(0.7, 0.1 + 0.25 * u.p0);                    // (p0: how vivid; they twinkle without going dim)
+    a = min(1.0, (1.0 - age) * 2.2) * min(1.0, age * 14.0) * (lo + (1.0 - lo) * (0.5 + 0.5 * sin(u.now * (5.0 + f32(ii % 7u)) + k * 2.3)));
     size = p.base * (1.0 - age * 0.25);
   }
   // the camera looks straight at the stage from "dist" away: what is nearer to you is bigger
@@ -115,12 +116,13 @@ export async function createFxGPU(host) {
   }
 
   // How the particles look and move (set from the app's Effects settings)
-  const style = { motion: "trails", color: [1, 0.29, 0.4], amount: 1, size: 1 };
+  const style = { motion: "trails", color: [1, 0.29, 0.4], amount: 1, size: 1, vivid: 0 };
   function setStyle(o) {
     if (o.motion) style.motion = o.motion;
     if (o.color) style.color = [1, 3, 5].map(i => parseInt(o.color.slice(i, i + 2), 16) / 255);
     if (o.amount != null) style.amount = o.amount;
     if (o.size != null) style.size = o.size;
+    if (o.vivid != null) style.vivid = o.vivid;
   }
 
   // ---- new particles are written straight into the graphics chip's memory ----
@@ -130,7 +132,7 @@ export async function createFxGPU(host) {
     n = Math.min(n, MAX);
     const now = clock(), a = new Float32Array(n * STRIDE);
     for (let i = 0; i < n; i++) {
-      const j = i * STRIDE, b = 0.8 + Math.random() * 0.2;
+      const j = i * STRIDE, bright = Math.min(1, 0.8 + 0.1 * style.vivid), b = bright + Math.random() * (1 - bright);
       a[j + 3] = now;
       a[j + 8] = style.color[0] * b; a[j + 9] = style.color[1] * b; a[j + 10] = style.color[2] * b;
       fill(a, j);
@@ -189,7 +191,7 @@ export async function createFxGPU(host) {
     raf = 0;
     if (lost) return;
     const now = clock(), dt = Math.min(0.05, now - last); last = now;
-    uni[0] = now; uni[1] = dt; uni[2] = W; uni[3] = H; uni[4] = ratio; uni[5] = dist;
+    uni[0] = now; uni[1] = dt; uni[2] = W; uni[3] = H; uni[4] = ratio; uni[5] = dist; uni[6] = style.vivid;
     device.queue.writeBuffer(ubuf, 0, uni);
     const enc = device.createCommandEncoder();
     if (used) {

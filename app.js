@@ -671,9 +671,9 @@
       fx = made; fx.resize(W, H, pixelRatio()); applyFx(false);
       $("fx3dNote").textContent = fx.gpu ? "(running on WebGPU)" : navigator.gpu ? "(running on WebGL: WebGPU didn't start here)" : "(running on WebGL: this browser has no WebGPU)";
     };
-    const webgl = () => import("./fx3d.js?v=16").then(m => ready(m.createFx(canvas)));
+    const webgl = () => import("./fx3d.js?v=17").then(m => ready(m.createFx(canvas)));
     fxLoading = (navigator.gpu && !gpuFailed
-      ? import("./fxgpu.js?v=1").then(m => m.createFxGPU(canvas)).then(ready, e => { console.warn("WebGPU particles unavailable:", e); gpuFailed = true; return webgl(); })
+      ? import("./fxgpu.js?v=2").then(m => m.createFxGPU(canvas)).then(ready, e => { console.warn("WebGPU particles unavailable:", e); gpuFailed = true; return webgl(); })
       : webgl()).catch(e => { fxLoading = null; console.warn("3D effects unavailable:", e); ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(not available on this device)"; });
   }
   function burst(midi, color, big) {
@@ -1513,7 +1513,7 @@
   // ---------- Effects: presets, colours, particles, bloom and light rays ----------
   // "red" means the glowing look (lit notes on black); only the Classic preset uses the original flat look.
   const PRESETS = {      // (particles and shooting stars are exactly their colour: no white is mixed in)
-    trails:   { right: "#ff2448", left: "#d10f3a", particle: "#ff4a66", starColor: "#ff4a66", motion: "trails",   amount: 1,   size: 1,   bloom: "soft",   rays: false },
+    trails:   { right: "#ff2448", left: "#d10f3a", particle: "#ff4a66", starColor: "#ff4a66", motion: "trails",   amount: 1,   size: 1,   bloom: "strong", rays: false },
     fountain: { right: "#ff3b30", left: "#ff9500", particle: "#ffb52e", starColor: "#ffb52e", motion: "fountain", amount: 1,   size: 1.2, bloom: "soft",   rays: true },
     embers:   { right: "#ff5a1f", left: "#e8300c", particle: "#ff7a1a", starColor: "#ff7a1a", motion: "embers",   amount: 1,   size: 1.3, bloom: "strong", rays: false },
     smoke:    { right: "#43b8ff", left: "#3a6bff", particle: "#6ec8ff", starColor: "#6ec8ff", motion: "smoke",    amount: 1,   size: 1,   bloom: "soft",   rays: true },
@@ -1530,7 +1530,7 @@
     neon:     { kbStyle: "neon", kbWhite: "#0b0b10", kbBlack: "#000000", kbPressed: "#00e5ff", kbLit: "color" },
     gold:     { kbStyle: "flat", kbWhite: "#f6ecd2", kbBlack: "#2a1c08", kbPressed: "#ffb52e", kbLit: "color" },
   };
-  const FX_DEFAULT = { preset: "trails", ...PRESETS.trails, kb: "flat", ...KB_PRESETS.flat, stars: true, starEvery: 5, wisps: true, v: 2 };
+  const FX_DEFAULT = { preset: "trails", ...PRESETS.trails, kb: "flat", ...KB_PRESETS.flat, stars: true, starEvery: 5, wisps: true, vivid: 2, v: 3 };
   let red = true, FX = { ...FX_DEFAULT };
   const lum = h => { const [r, g, b] = hexRgb(h); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; };
   const mixHex = (a, b, t) => { const A = hexRgb(a), B = hexRgb(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",")})`; };
@@ -1540,12 +1540,13 @@
   const shade = (h, m) => { const [r, g, b] = hexRgb(h).map(v => Math.round(v * m)); return `rgb(${r},${g},${b})`; };                       // toward black
   function applyFx(save = true) {
     red = !FX.classic; COLORS.right = FX.right; COLORS.left = FX.left; grad = null;
-    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount, size: FX.size });
+    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount, size: FX.size * (1 + 0.15 * FX.vivid), vivid: FX.vivid });
     $("fxPreset").value = FX.preset; $("fxRight").value = FX.right; $("fxLeft").value = FX.left; $("fxParticle").value = FX.particle;
     $("fxMotion").value = FX.motion; $("fxAmount").value = FX.amount; $("fxSize").value = FX.size; $("fxBloom").value = FX.bloom; $("fxRays").checked = !!FX.rays;
     $("fxAmountVal").textContent = Math.round(FX.amount * 100) + "%"; $("fxSizeVal").textContent = Math.round(FX.size * 100) + "%";
     $("fxWisps").checked = !!FX.wisps; $("fxStars").checked = !!FX.stars; $("fxStarColor").value = FX.starColor; $("fxStarEvery").value = FX.starEvery;
     $("fxStarEveryVal").textContent = "every " + FX.starEvery + " s";
+    $("fxVivid").value = FX.vivid; $("fxVividVal").textContent = Math.round(FX.vivid * 100) + "%";
     $("kbPreset").value = FX.kb; $("kbWhite").value = FX.kbWhite; $("kbBlack").value = FX.kbBlack; $("kbPressed").value = FX.kbPressed; $("kbLit").value = FX.kbLit;
     $("kbPressedRow").hidden = FX.kbLit !== "color" && FX.kbStyle !== "neon";
     bloomSetup();
@@ -1571,8 +1572,10 @@
     if (!bloomCv) { bloomCv = document.createElement("canvas"); bloomCv.className = "bloom"; bloomCv.setAttribute("aria-hidden", "true"); canvas.after(bloomCv); bctx = bloomCv.getContext("2d"); }
     if (fx && fx.canvas && fx.canvas.nextSibling !== bloomCv) fx.canvas.after(bloomCv);
     bloomCv.hidden = false;
-    bloomCv.style.opacity = FX.bloom === "strong" ? "1" : "0.65";
-    bloomCv.style.filter = `blur(${FX.bloom === "strong" ? 9 : 6}px)`;
+    // (vivid: a wider glow, with its colours pushed richer and brighter)
+    const V = FX.vivid, strong = FX.bloom === "strong";
+    bloomCv.style.opacity = String(Math.min(1, (strong ? 1 : 0.65) + 0.2 * V));
+    bloomCv.style.filter = `blur(${(strong ? 9 : 6) + 2 * V}px)` + (V > 0 ? ` saturate(${1 + 0.5 * V}) brightness(${1 + 0.35 * V})` : "");
     bloomSize();
   }
   function bloomSize() { if (bloomCv) { bloomCv.width = Math.max(1, Math.round(W * BS)); bloomCv.height = Math.max(1, Math.round(H * BS)); } }
@@ -1611,7 +1614,7 @@
       w.hist.push(w.x, w.y); if (w.hist.length > 36) w.hist.splice(0, 2);
       const n = w.hist.length / 2;
       for (let j = 1; j < n; j++) {                     // the tail fades toward its end
-        ctx.strokeStyle = rgba(FX.particle, 0.5 * (1 - a) * (j / n)); ctx.lineWidth = 0.6 + 0.9 * (j / n);
+        ctx.strokeStyle = rgba(FX.particle, Math.min(1, 0.5 + 0.25 * FX.vivid) * (1 - a) * (j / n)); ctx.lineWidth = 0.6 + (0.9 + 0.4 * FX.vivid) * (j / n);
         ctx.beginPath(); ctx.moveTo(w.hist[j * 2 - 2], w.hist[j * 2 - 1]); ctx.lineTo(w.hist[j * 2], w.hist[j * 2 + 1]); ctx.stroke();
       }
     }
@@ -1639,7 +1642,12 @@
       const fade = Math.min(1, a * 8) * (1 - a) ** 0.7, len = s.len * Math.min(1, a * 5);
       const tx = x - s.vx / sp * len, ty = y - s.vy / sp * len, g = ctx.createLinearGradient(tx, ty, x, y);
       g.addColorStop(0, rgba(FX.starColor, 0)); g.addColorStop(1, rgba(FX.starColor, fade));
-      ctx.strokeStyle = g; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
+      if (FX.vivid > 0) {                               // a soft halo around the streak
+        const hg = ctx.createLinearGradient(tx, ty, x, y);
+        hg.addColorStop(0, rgba(FX.starColor, 0)); hg.addColorStop(1, rgba(FX.starColor, fade * 0.14 * FX.vivid));
+        ctx.strokeStyle = hg; ctx.lineWidth = 7 + 3 * FX.vivid; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
+      }
+      ctx.strokeStyle = g; ctx.lineWidth = 2 + 0.75 * FX.vivid; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
       ctx.fillStyle = rgba(FX.starColor, fade); ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
       if (bloomCv && !bloomCv.hidden) glowList.push(["line", tx, ty, x, y, FX.starColor, fade]);
     }
@@ -1653,13 +1661,14 @@
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"], h = kbTop * 0.97, fl = 0.85 + 0.15 * Math.sin(now * 0.011 + m);
       const g = ctx.createLinearGradient(0, kbTop, 0, kbTop - h);
-      g.addColorStop(0, tint(c, 0.45, 0.32 * fl)); g.addColorStop(0.35, rgba(c, 0.12 * fl)); g.addColorStop(1, rgba(c, 0));
+      const rv = 1 + 0.5 * FX.vivid;
+      g.addColorStop(0, tint(c, 0.45, Math.min(1, 0.32 * fl * rv))); g.addColorStop(0.35, rgba(c, 0.12 * fl * rv)); g.addColorStop(1, rgba(c, 0));
       ctx.fillStyle = g; ctx.beginPath();
       ctx.moveTo(x - k.w * 0.35, kbTop); ctx.lineTo(x + k.w * 0.35, kbTop); ctx.lineTo(x + k.w * 1.8, kbTop - h); ctx.lineTo(x - k.w * 1.8, kbTop - h); ctx.closePath(); ctx.fill();
       for (let i = 0; i < 6; i++) {                     // thin rays, slowly turning
         const ang = (i - 2.5) * 0.11 + Math.sin(now * 0.0006 * (i + 1) + m * 1.3) * 0.06, len = h * (0.55 + 0.45 * (((i * 37 + m) % 7) / 7));
         const ex = x + Math.sin(ang) * len, ey = kbTop - Math.cos(ang) * len, rg = ctx.createLinearGradient(x, kbTop, ex, ey);
-        rg.addColorStop(0, tint(c, 0.6, 0.22 * fl)); rg.addColorStop(1, rgba(c, 0));
+        rg.addColorStop(0, tint(c, 0.6, Math.min(1, 0.22 * fl * rv))); rg.addColorStop(1, rgba(c, 0));
         ctx.strokeStyle = rg; ctx.lineWidth = 1.2 + (i % 3) * 0.8; ctx.beginPath(); ctx.moveTo(x, kbTop - 2); ctx.lineTo(ex, ey); ctx.stroke();
       }
     }
@@ -2468,9 +2477,11 @@
           const a0 = ctx.globalAlpha, c = n.state === "miss" ? "#7a2a36" : base, top = Math.max(-20, yb - h);
           ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = c;
           // (a note about to be played glows brighter: wider, stronger halo layers instead of a slow blurred shadow)
-          if (near) { ctx.globalAlpha = a0 * 0.1; rrect(x0 - 14, top - 14, w0 + 28, yb - top + 28, 18); ctx.fill(); }
-          ctx.globalAlpha = a0 * (near ? 0.2 : 0.09); rrect(x0 - 8, top - 8, w0 + 16, yb - top + 16, 12); ctx.fill();
-          ctx.globalAlpha = a0 * (near ? 0.36 : 0.2); rrect(x0 - 3.5, top - 3.5, w0 + 7, yb - top + 7, 9); ctx.fill();
+          const hv = 1 + 0.6 * FX.vivid;                    // (vivid: every halo stronger, and one more, wider)
+          if (FX.vivid > 0) { ctx.globalAlpha = a0 * 0.035 * FX.vivid; rrect(x0 - 22, top - 22, w0 + 44, yb - top + 44, 26); ctx.fill(); }
+          if (near) { ctx.globalAlpha = a0 * 0.1 * hv; rrect(x0 - 14, top - 14, w0 + 28, yb - top + 28, 18); ctx.fill(); }
+          ctx.globalAlpha = Math.min(1, a0 * (near ? 0.2 : 0.09) * hv); rrect(x0 - 8, top - 8, w0 + 16, yb - top + 16, 12); ctx.fill();
+          ctx.globalAlpha = Math.min(1, a0 * (near ? 0.36 : 0.2) * hv); rrect(x0 - 3.5, top - 3.5, w0 + 7, yb - top + 7, 9); ctx.fill();
           ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = a0;
           const gr = ctx.createLinearGradient(x0, 0, x0 + w0, 0);
           gr.addColorStop(0, c); gr.addColorStop(0.5, n.state === "miss" ? c : tint(c, 0.25)); gr.addColorStop(1, c);
@@ -2612,9 +2623,9 @@
     const rail = red ? COLORS.right : "#7fd4ff";
     if (red) glowList.push(["rail", rail]);
     // (its glow is a soft gradient strip: a blurred shadow across the whole screen every frame is slow on an iPad)
-    const rg = ctx.createLinearGradient(0, kbTop - 14, 0, kbTop + 10);
-    rg.addColorStop(0, rgba(rail, 0)); rg.addColorStop(0.5, rgba(rail, 0.45)); rg.addColorStop(1, rgba(rail, 0));
-    ctx.fillStyle = rg; ctx.fillRect(0, kbTop - 14, W, 24);
+    const rh = 12 + (red ? 5 * FX.vivid : 0), rg = ctx.createLinearGradient(0, kbTop - 2 - rh, 0, kbTop - 2 + rh);
+    rg.addColorStop(0, rgba(rail, 0)); rg.addColorStop(0.5, rgba(rail, Math.min(0.9, 0.45 + (red ? 0.2 * FX.vivid : 0)))); rg.addColorStop(1, rgba(rail, 0));
+    ctx.fillStyle = rg; ctx.fillRect(0, kbTop - 2 - rh, W, rh * 2);
     ctx.fillStyle = rail; ctx.fillRect(0, kbTop - 3, W, 2);
     if (red) { ctx.fillStyle = tint(rail, 0.75, 0.55); ctx.fillRect(0, kbTop - 2.5, W, 1); }
     // where a playing key meets the notes: only a thin line of light along the rail (no glowing ball)
@@ -3449,8 +3460,9 @@
     if (saved && saved.right) {
       FX = { ...FX_DEFAULT, ...saved };
       // settings from before particles became exactly their colour: a preset gets its new, purer particle colour
-      if (saved.v !== 2 && PRESETS[FX.preset]) FX = { ...FX, ...PRESETS[FX.preset] };
-      FX.v = 2;
+      if (!(saved.v >= 2) && PRESETS[FX.preset]) FX = { ...FX, ...PRESETS[FX.preset] };
+      if (!(saved.v >= 3) && FX.bloom === "soft") FX.bloom = "strong";     // (the vivid look came with a stronger glow)
+      FX.v = 3;
     } else if (localStorage.getItem("keyfall:look") === "classic") FX = { ...FX_DEFAULT, ...PRESETS.classic, preset: "classic" };
   } catch (e) {}
   applyFx(false);
@@ -3467,6 +3479,7 @@
   $("fxWisps").onchange = () => custom("wisps", $("fxWisps").checked);
   const setFxKey = (key, val) => { FX[key] = val; applyFx(); };                 // (not part of a preset)
   $("fxStars").onchange = () => setFxKey("stars", $("fxStars").checked);
+  $("fxVivid").oninput = () => setFxKey("vivid", +$("fxVivid").value);
   $("fxStarColor").oninput = () => setFxKey("starColor", $("fxStarColor").value);
   $("fxStarEvery").oninput = () => { nextStar = 0; setFxKey("starEvery", +$("fxStarEvery").value); };
   $("kbPreset").onchange = () => { const p = $("kbPreset").value; if (KB_PRESETS[p]) FX = { ...FX, ...KB_PRESETS[p], kb: p }; else FX.kb = "custom"; applyFx(); };
