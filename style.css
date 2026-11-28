@@ -330,3 +330,7 @@ input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid rgb
 #fxBox .mrow { margin-bottom: 10px; }
 #fxBox input[type=range] { flex: 1 1 160px; }
 .fxval { min-width: 44px; color: #f3f2f6; font-variant-numeric: tabular-nums; }
+#kbBox .mrow { margin-bottom: 10px; }
+#fxStarEvery { flex: 1 1 120px; }
+.fxval { white-space: nowrap; }
+#kbPressedRow[hidden] { display: none; }

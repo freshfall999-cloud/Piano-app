@@ -55,9 +55,9 @@ export function createFx(host) {
         float d = length(gl_PointCoord - 0.5) * 2.0;
         if (d > 1.0) discard;
         float core = 1.0 - smoothstep(0.55, 1.0, d);            // a crisp, tiny dot (no soft halo)
-        gl_FragColor = vec4(mix(vC, vec3(1.0), 0.45) * 1.6, vA * core);
+        gl_FragColor = vec4(vC, vA * core);                     // the colour as chosen
       }`,
-    ...glow,
+    ...glow, blendDst: THREE.OneMinusSrcAlphaFactor,
   });
   const sparks = new THREE.Points(geo, sparkMat);
   sparks.frustumCulled = false;
@@ -136,9 +136,9 @@ export function createFx(host) {
   //   embers (flickering, wandering sparks of fire), shock (a ring bursting outward on every hit, light trails)
   const style = { motion: "trails", color: new THREE.Color("#ffd6de"), amount: 1, size: 1 };
   function setStyle(o) { if (o.motion) style.motion = o.motion; if (o.color) style.color = new THREE.Color(o.color); if (o.amount != null) style.amount = o.amount; if (o.size != null) style.size = o.size; }
-  function paint(k, bright = 0.85) {                       // mostly pale (the colour mixed with white), some the full colour
-    const c = style.color, b = bright + Math.random() * (1 - bright), pale = Math.random() < 0.7, m = pale ? 0.55 : 0;
-    col[k * 3] = (c.r + (1 - c.r) * m) * b; col[k * 3 + 1] = (c.g + (1 - c.g) * m) * b; col[k * 3 + 2] = (c.b + (1 - c.b) * m) * b;
+  function paint(k, bright = 0.8) {                        // exactly the chosen colour (no white mixed in), some a little dimmer
+    const c = style.color, b = bright + Math.random() * (1 - bright);
+    col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b;
   }
   function spawn(kind, wx, wy, keyW, n) {
     const now = performance.now() / 1000;
@@ -170,15 +170,19 @@ export function createFx(host) {
     const now = performance.now() / 1000;
     for (let i = 0; i < n; i++) {
       const k = next; next = (next + 1) % MAX;
-      // from a narrow spot on the key, at different speeds: they string out into a thin trail that rises high
-      pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.35; pos[k * 3 + 1] = wy + Math.random() * 4; pos[k * 3 + 2] = Math.random() * 8;
-      vel[k * 3] = (Math.random() - 0.5) * 8 * speed;
-      vel[k * 3 + 1] = (45 + Math.random() * 115) * speed;
+      // from a narrow spot on the key they shoot up, slow down and hang in the air, drifting together in curling
+      // strands (as in piano videos); a few stray from the strand
+      const stray = Math.random() < 0.12;
+      pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.3; pos[k * 3 + 1] = wy + Math.random() * 4; pos[k * 3 + 2] = Math.random() * 8;
+      vel[k * 3] = (Math.random() - 0.5) * (stray ? 60 : 10) * speed;
+      vel[k * 3 + 1] = (110 + Math.random() * 230) * speed;
       vel[k * 3 + 2] = Math.random() * 6;
       paint(k);
-      born[k] = now; life[k] = 2.4 + Math.random() * 2.2;
-      // most are tiny pinpoints; one in five is a brighter sparkle
-      base[k] = (Math.random() < 0.2 ? 1.4 + Math.random() * 1.2 : 0.7 + Math.random() * 0.5) * style.size; glitter[k] = 2; seed[k] = sd + Math.random() * 0.15;
+      born[k] = now; life[k] = 2.2 + Math.random() * 2.6;
+      // most are tiny pinpoints; some are brighter sparkles of different sizes
+      const r = Math.random();
+      base[k] = (r < 0.05 ? 2.4 + Math.random() * 1.4 : r < 0.25 ? 1.3 + Math.random() * 0.9 : 0.7 + Math.random() * 0.5) * style.size;
+      glitter[k] = 2; seed[k] = sd + (stray ? Math.random() * 3 : Math.random() * 0.12);
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
@@ -216,9 +220,9 @@ export function createFx(host) {
       } else if (kind === 5) { const d = Math.pow(0.06, dt); vel[k * 3] *= d; vel[k * 3 + 1] *= d; vel[k * 3 + 2] *= d; }   // ring: slows quickly
       else if (kind === 2) {                               // smoke: follows a slowly turning swirl as it rises
         const y = pos[k * 3 + 1], sd = seed[k];
-        const want = Math.sin(y * 0.009 + sd * 3.1 + now * 0.5) * 70 + Math.sin(y * 0.023 - now * 0.9 + sd * 5.3) * 28;
-        vel[k * 3] += (want - vel[k * 3]) * Math.min(1, dt * 2.6);
-        vel[k * 3 + 1] = Math.min(190, vel[k * 3 + 1] + 14 * dt); vel[k * 3 + 2] *= float;
+        const want = Math.sin(y * 0.012 + sd * 3.1 + now * 0.45) * 62 + Math.sin(y * 0.031 - now * 0.8 + sd * 5.3) * 30;
+        vel[k * 3] += (want - vel[k * 3]) * Math.min(1, dt * 3);
+        vel[k * 3 + 1] = vel[k * 3 + 1] * Math.pow(0.5, dt) + 16 * dt; vel[k * 3 + 2] *= float;   // slows down, then hangs and drifts
       } else if (glitter[k]) {                             // glitter: rises gently and swirls
         vel[k * 3] = vel[k * 3] * float + Math.sin(now * 2.1 + k * 1.7 + pos[k * 3 + 1] * 0.015) * 160 * dt;
         vel[k * 3 + 1] = vel[k * 3 + 1] * float + 40 * dt; vel[k * 3 + 2] *= float;

@@ -664,7 +664,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=14").then(m => {
+    fxLoading = import("./fx3d.js?v=15").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio()); applyFx(false);
@@ -1506,15 +1506,27 @@
   const DARK = { "#39b6ff": "#1f86c9", "#ffa23a": "#d9761a", "#e2495b": "#b02a3b" };
   // ---------- Effects: presets, colours, particles, bloom and light rays ----------
   // "red" means the glowing look (lit notes on black); only the Classic preset uses the original flat look.
-  const PRESETS = {
-    trails:   { right: "#ff2448", left: "#d10f3a", particle: "#ffd6de", motion: "trails",   amount: 1,   size: 1,   bloom: "soft",   rays: false },
-    fountain: { right: "#ff3b30", left: "#ff9500", particle: "#ffd27a", motion: "fountain", amount: 1,   size: 1.2, bloom: "soft",   rays: true },
-    embers:   { right: "#ff5a1f", left: "#e8300c", particle: "#ffae42", motion: "embers",   amount: 1,   size: 1.3, bloom: "strong", rays: false },
-    smoke:    { right: "#43b8ff", left: "#3a6bff", particle: "#e2f4ff", motion: "smoke",    amount: 1,   size: 1,   bloom: "soft",   rays: true },
-    shock:    { right: "#b84dff", left: "#ff3fbf", particle: "#f0c8ff", motion: "shock",    amount: 1,   size: 1.1, bloom: "strong", rays: true },
-    classic:  { right: "#39b6ff", left: "#ffa23a", particle: "#cfeaff", motion: "trails",   amount: 0.7, size: 1,   bloom: "off",    rays: false, classic: true },
+  const PRESETS = {      // (particles and shooting stars are exactly their colour: no white is mixed in)
+    trails:   { right: "#ff2448", left: "#d10f3a", particle: "#ff4a66", starColor: "#ff4a66", motion: "trails",   amount: 1,   size: 1,   bloom: "soft",   rays: false },
+    fountain: { right: "#ff3b30", left: "#ff9500", particle: "#ffb52e", starColor: "#ffb52e", motion: "fountain", amount: 1,   size: 1.2, bloom: "soft",   rays: true },
+    embers:   { right: "#ff5a1f", left: "#e8300c", particle: "#ff7a1a", starColor: "#ff7a1a", motion: "embers",   amount: 1,   size: 1.3, bloom: "strong", rays: false },
+    smoke:    { right: "#43b8ff", left: "#3a6bff", particle: "#6ec8ff", starColor: "#6ec8ff", motion: "smoke",    amount: 1,   size: 1,   bloom: "soft",   rays: true },
+    shock:    { right: "#b84dff", left: "#ff3fbf", particle: "#c77dff", starColor: "#c77dff", motion: "shock",    amount: 1,   size: 1.1, bloom: "strong", rays: true },
+    classic:  { right: "#39b6ff", left: "#ffa23a", particle: "#39b6ff", starColor: "#39b6ff", motion: "trails",   amount: 0.7, size: 1,   bloom: "off",    rays: false, classic: true },
   };
-  let red = true, FX = { preset: "trails", ...PRESETS.trails };
+  // How the on-screen piano looks. style: flat (plain keys), real (a grand's keys, with depth), neon (outlined in light).
+  // lit: what a played key does: "dark" (a shade darker), "color" (your colour) or "note" (the colour of its hand's notes)
+  const KB_PRESETS = {
+    flat:     { kbStyle: "flat", kbWhite: "#f4f4f4", kbBlack: "#141416", kbPressed: "#ff2448", kbLit: "dark" },
+    lit:      { kbStyle: "flat", kbWhite: "#f4f4f4", kbBlack: "#141416", kbPressed: "#ff2448", kbLit: "note" },
+    grand:    { kbStyle: "real", kbWhite: "#fbfaf7", kbBlack: "#141418", kbPressed: "#ff2448", kbLit: "dark" },
+    midnight: { kbStyle: "flat", kbWhite: "#24242c", kbBlack: "#07070a", kbPressed: "#ff2448", kbLit: "note" },
+    neon:     { kbStyle: "neon", kbWhite: "#0b0b10", kbBlack: "#000000", kbPressed: "#00e5ff", kbLit: "color" },
+    gold:     { kbStyle: "flat", kbWhite: "#f6ecd2", kbBlack: "#2a1c08", kbPressed: "#ffb52e", kbLit: "color" },
+  };
+  const FX_DEFAULT = { preset: "trails", ...PRESETS.trails, kb: "flat", ...KB_PRESETS.flat, stars: true, starEvery: 5, wisps: true, v: 2 };
+  let red = true, FX = { ...FX_DEFAULT };
+  const lum = h => { const [r, g, b] = hexRgb(h); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; };
   const mixHex = (a, b, t) => { const A = hexRgb(a), B = hexRgb(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",")})`; };
   const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
   const rgba = (h, a) => { const [r, g, b] = hexRgb(h); return `rgba(${r},${g},${b},${a})`; };
@@ -1526,6 +1538,10 @@
     $("fxPreset").value = FX.preset; $("fxRight").value = FX.right; $("fxLeft").value = FX.left; $("fxParticle").value = FX.particle;
     $("fxMotion").value = FX.motion; $("fxAmount").value = FX.amount; $("fxSize").value = FX.size; $("fxBloom").value = FX.bloom; $("fxRays").checked = !!FX.rays;
     $("fxAmountVal").textContent = Math.round(FX.amount * 100) + "%"; $("fxSizeVal").textContent = Math.round(FX.size * 100) + "%";
+    $("fxWisps").checked = !!FX.wisps; $("fxStars").checked = !!FX.stars; $("fxStarColor").value = FX.starColor; $("fxStarEvery").value = FX.starEvery;
+    $("fxStarEveryVal").textContent = "every " + FX.starEvery + " s";
+    $("kbPreset").value = FX.kb; $("kbWhite").value = FX.kbWhite; $("kbBlack").value = FX.kbBlack; $("kbPressed").value = FX.kbPressed; $("kbLit").value = FX.kbLit;
+    $("kbPressedRow").hidden = FX.kbLit !== "color" && FX.kbStyle !== "neon";
     bloomSetup();
     if (save) try { localStorage.setItem("keyfall:fxset", JSON.stringify(FX)); } catch (e) {}
   }
@@ -1553,12 +1569,65 @@
     for (const g of glowList) {
       if (g[0] === "note") { b.globalAlpha = g[6]; b.fillStyle = g[5]; b.fillRect(g[1], g[2], g[3], g[4]); }
       else if (g[0] === "flare") { const r = g[3] * 1.6, fl = b.createRadialGradient(g[1], g[2], 0, g[1], g[2], r); fl.addColorStop(0, "rgba(255,255,255,1)"); fl.addColorStop(0.35, rgba(g[4], 0.8)); fl.addColorStop(1, rgba(g[4], 0)); b.globalAlpha = 1; b.fillStyle = fl; b.fillRect(g[1] - r, g[2] - r, r * 2, r * 2); }
+      else if (g[0] === "line") { b.globalAlpha = g[6]; b.strokeStyle = g[5]; b.lineWidth = 5; b.beginPath(); b.moveTo(g[1], g[2]); b.lineTo(g[3], g[4]); b.stroke(); }
       else if (g[0] === "rail") { b.globalAlpha = 0.7; b.fillStyle = g[1]; b.fillRect(0, kbTop - 4, W, 4); }
     }
     glowList.length = 0;
     b.globalAlpha = 1;
     if (fx && fx.canvas) { b.setTransform(1, 0, 0, 1, 0, 0); try { b.drawImage(fx.canvas, 0, 0, bloomCv.width, bloomCv.height); } catch (e) {} }   // the particles glow too
     b.globalCompositeOperation = "source-over";
+  }
+  // Wisps: thin streaks of light that rise quickly from a playing key and curl away (in the particles' colour)
+  const wisps = [];
+  function spawnWisp(x, w) {
+    wisps.push({ x: x + (Math.random() - 0.5) * w * 0.5, y: kbTop - 3, vx: (Math.random() - 0.5) * 60, vy: -(260 + Math.random() * 260),
+      curl: (Math.random() - 0.5) * 500, t: performance.now(), life: 700 + Math.random() * 600, hist: [] });
+    if (wisps.length > 160) wisps.shift();
+  }
+  function drawWisps(now) {
+    if (!wisps.length) return;
+    ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+    for (let i = wisps.length - 1; i >= 0; i--) {
+      const w = wisps[i], a = (now - w.t) / w.life;
+      if (a >= 1) { wisps.splice(i, 1); continue; }
+      w.vx += w.curl * drawDt; w.curl *= Math.pow(0.4, drawDt); w.vy *= Math.pow(0.45, drawDt);
+      w.x += w.vx * drawDt; w.y += w.vy * drawDt;
+      w.hist.push(w.x, w.y); if (w.hist.length > 36) w.hist.splice(0, 2);
+      const n = w.hist.length / 2;
+      for (let j = 1; j < n; j++) {                     // the tail fades toward its end
+        ctx.strokeStyle = rgba(FX.particle, 0.5 * (1 - a) * (j / n)); ctx.lineWidth = 0.6 + 0.9 * (j / n);
+        ctx.beginPath(); ctx.moveTo(w.hist[j * 2 - 2], w.hist[j * 2 - 1]); ctx.lineTo(w.hist[j * 2], w.hist[j * 2 + 1]); ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+  // Shooting stars: every few seconds one streaks across the dark behind the notes, in your colour
+  const stars = [];
+  let nextStar = 0;
+  function drawStars(now) {
+    if (!red || !FX.stars || reduceMotion) { stars.length = 0; return; }
+    if (!nextStar) nextStar = now + 1500;
+    if (now >= nextStar) {
+      nextStar = now + FX.starEvery * 1000 * (0.75 + Math.random() * 0.5);
+      const dir = Math.random() < 0.5 ? 1 : -1, ang = (14 + Math.random() * 22) * Math.PI / 180, sp = 700 + Math.random() * 500;
+      stars.push({ x: dir > 0 ? W * (Math.random() * 0.55) : W * (0.45 + Math.random() * 0.55), y: kbTop * (0.03 + Math.random() * 0.4),
+        vx: Math.cos(ang) * sp * dir, vy: Math.sin(ang) * sp, len: 130 + Math.random() * 130, t: now, life: 650 + Math.random() * 450 });
+    }
+    if (!stars.length) return;
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, kbTop - 4); ctx.clip();
+    ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i], a = (now - s.t) / s.life;
+      if (a >= 1) { stars.splice(i, 1); continue; }
+      const t = (now - s.t) / 1000, x = s.x + s.vx * t, y = s.y + s.vy * t, sp = Math.hypot(s.vx, s.vy);
+      const fade = Math.min(1, a * 8) * (1 - a) ** 0.7, len = s.len * Math.min(1, a * 5);
+      const tx = x - s.vx / sp * len, ty = y - s.vy / sp * len, g = ctx.createLinearGradient(tx, ty, x, y);
+      g.addColorStop(0, rgba(FX.starColor, 0)); g.addColorStop(1, rgba(FX.starColor, fade));
+      ctx.strokeStyle = g; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
+      ctx.fillStyle = rgba(FX.starColor, fade); ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
+      if (bloomCv && !bloomCv.hidden) glowList.push(["line", tx, ty, x, y, FX.starColor, fade]);
+    }
+    ctx.restore();
   }
   // Light rays: a beam of light from each playing key up into the dark, with a few thin rays fanning out
   function drawRays(now) {
@@ -2351,7 +2420,9 @@
     if (!red && !(song && !drill && !train && !rec && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
+    drawStars(now);
     drawRays(now);
+    drawWisps(now);
     // light beams rising from keys that were just hit
     for (let i = beams.length - 1; i >= 0; i--) {
       const bm = beams[i], a = (now - bm.t) / 420;
@@ -2456,23 +2527,67 @@
       if (d !== want) { d += (want - d) * Math.min(1, drawDt / 0.03); if (Math.abs(want - d) < 0.03) d = want; keyDepth.set(k.midi, d); }
       const hint = k.midi === badKey || flash ? (red ? "#b0b4c8" : "#ff6b7d") : target.has(k.midi) ? (pass ? "#2e9d5f" : "#8fe9b0")
         : learned ? (pass ? "#34507a" : "#cfe2fb") : null;
-      // a flat keyboard: plain white and black keys; a played key just gets a little darker
-      const kx = k.x + (pass ? 0 : 0.5), kw = k.w - (pass ? 0 : 1);
-      if (!pass) {
-        if (hint && target.has(k.midi)) { ctx.shadowColor = hint; ctx.shadowBlur = 14; }
-        ctx.fillStyle = hint || (d > 0 ? mixHex("#f4f4f4", "#c9c9c9", d) : "#f4f4f4");
-        rrect(kx, kbTop - 2, kw, k.h, 3); ctx.fill();
-        ctx.shadowBlur = 0;
+      // the keyboard's look (Effects settings): flat keys, a grand's keys with depth, or keys outlined in light
+      const base = pass ? FX.kbBlack : FX.kbWhite;
+      const litCol = FX.kbLit === "note" ? COLORS[k.midi < 60 ? "left" : "right"] : FX.kbPressed;
+      const pressed = FX.kbLit === "dark" && FX.kbStyle !== "neon" ? mixHex(base, lum(base) > 0.4 ? "#000000" : "#ffffff", 0.2 * d) : mixHex(base, litCol, 0.9 * d);
+      if (FX.kbStyle === "real") {
+        const kx = k.x + (pass ? 0 : 0.6), kw = k.w - (pass ? 0 : 1.2);
+        if (!pass) {
+          const top = kbTop - 2 + d * 3, bottom = kbTop + k.h - 2 + d * 2, lip = 7 * (1 - d);   // the front edge shows until the key is down
+          if (hint && target.has(k.midi)) { ctx.shadowColor = hint; ctx.shadowBlur = 14; }
+          ctx.fillStyle = hint ? keyFill(hint, k) : grad.white;
+          rrect(kx, top, kw, bottom - top, 4); ctx.fill();
+          ctx.shadowBlur = 0;
+          if (lip > 0.5) {
+            ctx.fillStyle = grad.lip; rrect(kx, bottom - lip, kw, lip, 3); ctx.fill();
+            ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.fillRect(kx + 1, bottom - lip, kw - 2, 1);        // the edge catching the light
+          }
+          if (!hint) {                                     // a sheen on the left edge, a soft shadow on the right
+            ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.fillRect(kx, top + 4, 1, bottom - top - lip - 5);
+            ctx.fillStyle = "rgba(0,0,0,.07)"; ctx.fillRect(kx + kw - 1.5, top + 4, 1.5, bottom - top - lip - 5);
+          }
+          if (d > 0) {                                     // down between its neighbours: in their shadow at the top and sides
+            const sh = ctx.createLinearGradient(0, top, 0, top + k.h * 0.45);
+            sh.addColorStop(0, `rgba(0,0,0,${0.42 * d})`); sh.addColorStop(1, "rgba(0,0,0,0)");
+            ctx.fillStyle = sh; ctx.fillRect(kx, top, kw, k.h * 0.45);
+            ctx.fillStyle = `rgba(0,0,0,${0.22 * d})`; ctx.fillRect(kx, top, 2, bottom - top); ctx.fillRect(kx + kw - 2, top, 2, bottom - top);
+          }
+        } else {
+          const bh = k.h + d * 2, face = bh * (0.12 - 0.08 * d), y0 = kbTop - 2 + d * 2;        // the sloped front shrinks as it goes down
+          ctx.save();                                      // a soft shadow cast on the white keys below
+          ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4 - d * 2; ctx.shadowOffsetX = 1;
+          ctx.fillStyle = "#000"; rrect(kx, y0, kw, bh, 3); ctx.fill(); ctx.restore();
+          ctx.fillStyle = hint ? keyFill(hint, k) : grad.black;
+          rrect(kx, y0, kw, bh, 3); ctx.fill();
+          if (!hint) {
+            ctx.fillStyle = "rgba(255,255,255,.07)"; ctx.fillRect(kx + 1, y0 + 2, Math.max(1, kw * 0.12), bh - face - 3);    // bevels
+            ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(kx + kw - Math.max(1, kw * 0.12) - 1, y0 + 2, Math.max(1, kw * 0.12), bh - face - 3);
+            ctx.globalAlpha = 1 - 0.6 * d; ctx.fillStyle = grad.gloss;                                             // lacquer
+            rrect(kx + kw * 0.2, y0 + 3, kw * 0.6, bh - face - 5, 2); ctx.fill(); ctx.globalAlpha = 1;
+            ctx.fillStyle = grad.face; ctx.fillRect(kx + 0.5, y0 + bh - face, kw - 1, face);
+            ctx.fillStyle = "rgba(255,255,255,.22)"; ctx.fillRect(kx + 1, y0 + bh - face, kw - 2, 1);
+          }
+          if (d > 0) { ctx.fillStyle = `rgba(0,0,0,${0.3 * d})`; rrect(kx, y0, kw, bh, 3); ctx.fill(); }
+        }
+        if (d > 0 && FX.kbLit !== "dark" && !hint) {       // a played key lights up in the chosen colour
+          ctx.fillStyle = rgba(litCol, 0.55 * d); rrect(k.x + (pass ? 0 : 0.6), kbTop - 2 + d * 2, k.w - (pass ? 0 : 1.2), k.h, pass ? 3 : 4); ctx.fill();
+        }
       } else {
-        ctx.fillStyle = hint || (d > 0 ? mixHex("#141416", "#3a3a40", d) : "#141416");
-        rrect(kx, kbTop - 2, kw, k.h, 2); ctx.fill();
+        const kx = k.x + (pass ? 0 : 0.5), kw = k.w - (pass ? 0 : 1), neon = FX.kbStyle === "neon";
+        if (hint && target.has(k.midi)) { ctx.shadowColor = hint; ctx.shadowBlur = 14; }
+        else if (neon && d > 0) { ctx.shadowColor = litCol; ctx.shadowBlur = 16 * d; }
+        ctx.fillStyle = hint || (d > 0 ? pressed : base);
+        rrect(kx, kbTop - 2, kw, k.h, pass ? 2 : 3); ctx.fill();
+        ctx.shadowBlur = 0;
+        if (neon) { ctx.strokeStyle = rgba(FX.kbPressed, pass ? 0.9 : 0.6); ctx.lineWidth = 1; rrect(kx + 0.5, kbTop - 1.5, kw - 1, k.h - 1, pass ? 2 : 3); ctx.stroke(); }
       }
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
       if (!text || k.w < 11) continue;
       ctx.font = `${Math.max(9, Math.min(13, k.w * 0.55))}px system-ui, sans-serif`;
-      ctx.fillStyle = pass ? "#8d8f9a" : "#8a8781";
-      ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10);
+      ctx.fillStyle = lum(pass ? FX.kbBlack : FX.kbWhite) > 0.45 ? "rgba(0,0,0,.42)" : "rgba(255,255,255,.5)";
+      ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10 + (FX.kbStyle === "real" ? (keyDepth.get(k.midi) || 0) * 2 : 0));
     }
 
     // the hit line: a glowing rail the notes land on
@@ -2567,6 +2682,7 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
+      if (red && FX.wisps && FX.amount > 0 && Math.random() < 5 * dt) spawnWisp(x, k.w);
       if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, m); } catch (e) {} continue; }
       for (let q = Math.floor(260 * FX.amount * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
         vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: (0.5 + Math.random() * 0.6) * FX.size, c: Math.random() < 0.45 ? "#ffffff" : FX.particle });
@@ -3292,11 +3408,15 @@
   try { if (localStorage.getItem("keyfall:fx3d") === "0") ui.fx3d.checked = false; } catch (e) {}
   try {
     const saved = JSON.parse(localStorage.getItem("keyfall:fxset") || "null");
-    if (saved && saved.right) FX = { ...PRESETS.trails, ...saved };
-    else if (localStorage.getItem("keyfall:look") === "classic") FX = { preset: "classic", ...PRESETS.classic };
+    if (saved && saved.right) {
+      FX = { ...FX_DEFAULT, ...saved };
+      // settings from before particles became exactly their colour: a preset gets its new, purer particle colour
+      if (saved.v !== 2 && PRESETS[FX.preset]) FX = { ...FX, ...PRESETS[FX.preset] };
+      FX.v = 2;
+    } else if (localStorage.getItem("keyfall:look") === "classic") FX = { ...FX_DEFAULT, ...PRESETS.classic, preset: "classic" };
   } catch (e) {}
   applyFx(false);
-  $("fxPreset").onchange = () => { const p = $("fxPreset").value; if (PRESETS[p]) FX = { preset: p, ...PRESETS[p] }; else FX.preset = "custom"; applyFx(); };
+  $("fxPreset").onchange = () => { const p = $("fxPreset").value; if (PRESETS[p]) FX = { ...FX, classic: false, ...PRESETS[p], preset: p }; else FX.preset = "custom"; applyFx(); };
   const custom = (key, val) => { FX[key] = val; FX.preset = "custom"; applyFx(); };
   $("fxRight").oninput = () => custom("right", $("fxRight").value);
   $("fxLeft").oninput = () => custom("left", $("fxLeft").value);
@@ -3306,6 +3426,17 @@
   $("fxSize").oninput = () => custom("size", +$("fxSize").value);
   $("fxBloom").onchange = () => custom("bloom", $("fxBloom").value);
   $("fxRays").onchange = () => custom("rays", $("fxRays").checked);
+  $("fxWisps").onchange = () => custom("wisps", $("fxWisps").checked);
+  const setFxKey = (key, val) => { FX[key] = val; applyFx(); };                 // (not part of a preset)
+  $("fxStars").onchange = () => setFxKey("stars", $("fxStars").checked);
+  $("fxStarColor").oninput = () => setFxKey("starColor", $("fxStarColor").value);
+  $("fxStarEvery").oninput = () => { nextStar = 0; setFxKey("starEvery", +$("fxStarEvery").value); };
+  $("kbPreset").onchange = () => { const p = $("kbPreset").value; if (KB_PRESETS[p]) FX = { ...FX, ...KB_PRESETS[p], kb: p }; else FX.kb = "custom"; applyFx(); };
+  const kbCustom = (key, val) => { FX[key] = val; FX.kb = "custom"; applyFx(); };
+  $("kbWhite").oninput = () => kbCustom("kbWhite", $("kbWhite").value);
+  $("kbBlack").oninput = () => kbCustom("kbBlack", $("kbBlack").value);
+  $("kbPressed").oninput = () => kbCustom("kbPressed", $("kbPressed").value);
+  $("kbLit").onchange = () => kbCustom("kbLit", $("kbLit").value);
   try { const v = localStorage.getItem("keyfall:sharp"); if (v && v !== ui.sharp.value) { ui.sharp.value = v; layout(); } } catch (e) {}
   ui.sharp.onchange = () => { perf.n = perf.sum = 0; $("sharpNote").textContent = ""; try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {} layout(); };
   ui.fx3d.onchange = () => { try { localStorage.setItem("keyfall:fx3d", ui.fx3d.checked ? "1" : "0"); } catch (e) {} setFx(ui.fx3d.checked); };
