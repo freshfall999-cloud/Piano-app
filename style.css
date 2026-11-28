@@ -320,3 +320,13 @@ button.primary:hover { background: linear-gradient(#ff6a83, #e01844); box-shadow
 body { background: #000; }
 header { background: #000; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, .06); }
 main { background: #000; }
+
+/* effects */
+.bloom { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; mix-blend-mode: screen; }
+.bloom[hidden] { display: none; }
+.fxcolors { gap: 10px 18px; margin-bottom: 10px; }
+.fxcolors label { color: #d3d1de; }
+input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; background: none; cursor: pointer; }
+#fxBox .mrow { margin-bottom: 10px; }
+#fxBox input[type=range] { flex: 1 1 160px; }
+.fxval { min-width: 44px; color: #f3f2f6; font-variant-numeric: tabular-nums; }

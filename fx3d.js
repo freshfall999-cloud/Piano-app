@@ -7,7 +7,8 @@ import * as THREE from "./vendor/three/three.module.min.js";
 const MAX = 48000;                                        // sparks, smoke and glitter alive at once
 
 export function createFx(host) {
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
+  // (the drawing is kept after each frame, so the bloom layer can copy it)
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power", preserveDrawingBuffer: true });
   const canvas = renderer.domElement;
   canvas.className = "fx3d";
   canvas.setAttribute("aria-hidden", "true");
@@ -106,8 +107,12 @@ export function createFx(host) {
   function burst(x, y, color, big, keyW = 20) {
     if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
-    // only tiny lights: a puff of them (no big sparks, no glowing blobs)
-    smoke(wx, wy, c, keyW * 1.3, big ? 500 : 220, Math.random() * 10, 1.4);
+    // only tiny lights (no big sparks, no glowing blobs): a burst shaped by the chosen motion
+    const a = style.amount, m = style.motion;
+    if (m === "shock") spawn(5, wx, wy, keyW, Math.round((big ? 420 : 200) * a));
+    else if (m === "fountain") spawn(3, wx, wy, keyW, Math.round((big ? 260 : 120) * a));
+    else if (m === "embers") spawn(4, wx, wy, keyW, Math.round((big ? 200 : 90) * a));
+    else smoke(wx, wy, c, keyW * 1.3, Math.round((big ? 500 : 220) * a), Math.random() * 10, 1.4);
     kick();
   }
 
@@ -126,6 +131,40 @@ export function createFx(host) {
       base[k] = 2.4 + Math.random() * 2.4; glitter[k] = 1;
     }
   }
+  // How the particles look and move (set from the app's Effects settings)
+  //   motion: trails (thin curling sparkle trails), smoke (wide, slow, soft), fountain (shoot up and fall back),
+  //   embers (flickering, wandering sparks of fire), shock (a ring bursting outward on every hit, light trails)
+  const style = { motion: "trails", color: new THREE.Color("#ffd6de"), amount: 1, size: 1 };
+  function setStyle(o) { if (o.motion) style.motion = o.motion; if (o.color) style.color = new THREE.Color(o.color); if (o.amount != null) style.amount = o.amount; if (o.size != null) style.size = o.size; }
+  function paint(k, bright = 0.85) {                       // mostly pale (the colour mixed with white), some the full colour
+    const c = style.color, b = bright + Math.random() * (1 - bright), pale = Math.random() < 0.7, m = pale ? 0.55 : 0;
+    col[k * 3] = (c.r + (1 - c.r) * m) * b; col[k * 3 + 1] = (c.g + (1 - c.g) * m) * b; col[k * 3 + 2] = (c.b + (1 - c.b) * m) * b;
+  }
+  function spawn(kind, wx, wy, keyW, n) {
+    const now = performance.now() / 1000;
+    for (let i = 0; i < n; i++) {
+      const k = next; next = (next + 1) % MAX;
+      pos[k * 3 + 2] = Math.random() * 8; vel[k * 3 + 2] = Math.random() * 6; paint(k); born[k] = now; glitter[k] = kind;
+      if (kind === 3) {                                    // fountain
+        pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.5; pos[k * 3 + 1] = wy;
+        vel[k * 3] = (Math.random() - 0.5) * 180; vel[k * 3 + 1] = 260 + Math.random() * 260;
+        life[k] = 1.1 + Math.random() * 0.8; base[k] = (0.9 + Math.random() * 1.1) * style.size;
+      } else if (kind === 4) {                             // embers
+        pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.7; pos[k * 3 + 1] = wy + Math.random() * 4;
+        vel[k * 3] = (Math.random() - 0.5) * 30; vel[k * 3 + 1] = 70 + Math.random() * 110;
+        life[k] = 1.4 + Math.random() * 1.6; base[k] = (1.2 + Math.random() * 1.6) * style.size;
+      } else if (kind === 5) {                             // shockwave ring
+        const a = Math.random() * Math.PI * 2, v = 220 + Math.random() * 200;
+        pos[k * 3] = wx; pos[k * 3 + 1] = wy;
+        vel[k * 3] = Math.cos(a) * v * 1.4; vel[k * 3 + 1] = Math.abs(Math.sin(a)) * v * 0.8 + 20; vel[k * 3 + 2] = Math.sin(a) * v;
+        life[k] = 0.6 + Math.random() * 0.5; base[k] = (0.9 + Math.random() * 0.9) * style.size;
+      } else {                                             // smoke: wide, slow, every particle its own swirl
+        pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 1.3; pos[k * 3 + 1] = wy + Math.random() * 6;
+        vel[k * 3] = (Math.random() - 0.5) * 20; vel[k * 3 + 1] = 25 + Math.random() * 60;
+        life[k] = 2.5 + Math.random() * 2.5; base[k] = (0.7 + Math.random() * 0.8) * style.size; seed[k] = Math.random() * 20; glitter[k] = 2;
+      }
+    }
+  }
   // smoke: a fine stream of tiny lights that rises slowly and curls (all the smoke of one key follows one swirl)
   function smoke(wx, wy, c, keyW, n, sd, speed = 1) {
     const now = performance.now() / 1000;
@@ -136,22 +175,25 @@ export function createFx(host) {
       vel[k * 3] = (Math.random() - 0.5) * 8 * speed;
       vel[k * 3 + 1] = (45 + Math.random() * 115) * speed;
       vel[k * 3 + 2] = Math.random() * 6;
-      const pale = Math.random() < 0.75, b = 0.85 + Math.random() * 0.15;
-      if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
-      else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
+      paint(k);
       born[k] = now; life[k] = 2.4 + Math.random() * 2.2;
       // most are tiny pinpoints; one in five is a brighter sparkle
-      base[k] = Math.random() < 0.2 ? 1.4 + Math.random() * 1.2 : 0.7 + Math.random() * 0.5; glitter[k] = 2; seed[k] = sd + Math.random() * 0.15;
+      base[k] = (Math.random() < 0.2 ? 1.4 + Math.random() * 1.2 : 0.7 + Math.random() * 0.5) * style.size; glitter[k] = 2; seed[k] = sd + Math.random() * 0.15;
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
   const tally = new Map();
-  function emit(x, y, color, keyW, dt, rate = 650, key = 0) {
+  const RATE = { trails: 650, smoke: 900, fountain: 220, embers: 170, shock: 260 };
+  function emit(x, y, color, keyW, dt, key = 0) {
     if (lost) return;
-    const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
+    const want = (RATE[style.motion] || 650) * style.amount * dt + (tally.get(key) || 0), n = Math.floor(want);
     tally.set(key, want - n);
-    const [wx, wy] = toWorld(x, y), c = new THREE.Color(color);
-    if (n) smoke(wx, wy, c, keyW, n, key * 1.37);
+    if (!n) return;
+    const [wx, wy] = toWorld(x, y), m = style.motion;
+    if (m === "fountain") spawn(3, wx, wy, keyW, n);
+    else if (m === "embers") spawn(4, wx, wy, keyW, n);
+    else if (m === "smoke") spawn(2, wx, wy, keyW, n);
+    else smoke(wx, wy, null, keyW, n, key * 1.37);        // trails (and the light trails of "shock")
     kick();
   }
 
@@ -167,7 +209,12 @@ export function createFx(host) {
       const age = (now - born[k]) / life[k];
       if (age >= 1) { life[k] = 0; alpha[k] = 0; size[k] = 0; continue; }
       alive++;
-      if (glitter[k] === 2) {                              // smoke: follows a slowly turning swirl as it rises
+      const kind = glitter[k];
+      if (kind === 3) { vel[k * 3] *= Math.pow(0.6, dt); vel[k * 3 + 1] -= 520 * dt; }                   // fountain: falls back
+      else if (kind === 4) {                               // embers: wander and drift up
+        vel[k * 3] = (vel[k * 3] + (Math.random() - 0.5) * 420 * dt) * Math.pow(0.3, dt); vel[k * 3 + 1] += 18 * dt;
+      } else if (kind === 5) { const d = Math.pow(0.06, dt); vel[k * 3] *= d; vel[k * 3 + 1] *= d; vel[k * 3 + 2] *= d; }   // ring: slows quickly
+      else if (kind === 2) {                               // smoke: follows a slowly turning swirl as it rises
         const y = pos[k * 3 + 1], sd = seed[k];
         const want = Math.sin(y * 0.009 + sd * 3.1 + now * 0.5) * 70 + Math.sin(y * 0.023 - now * 0.9 + sd * 5.3) * 28;
         vel[k * 3] += (want - vel[k * 3]) * Math.min(1, dt * 2.6);
@@ -179,7 +226,13 @@ export function createFx(host) {
         vel[k * 3] *= drag; vel[k * 3 + 2] *= drag; vel[k * 3 + 1] = vel[k * 3 + 1] * drag - 900 * dt;   // air and gravity
       }
       pos[k * 3] += vel[k * 3] * dt; pos[k * 3 + 1] += vel[k * 3 + 1] * dt; pos[k * 3 + 2] += vel[k * 3 + 2] * dt;
-      if (glitter[k] === 2) {
+      if (kind >= 3) {
+        alpha[k] = kind === 4 ? (1 - age) * (0.45 + 0.55 * Math.abs(Math.sin(now * 17 + k * 1.7)))      // flicker
+          : Math.pow(1 - age, kind === 5 ? 1.6 : 1.2) * Math.min(1, age * 14);
+        size[k] = base[k] * (1 - age * 0.3);
+        continue;
+      }
+      if (kind === 2) {
         // bright, crisp points that sparkle (each twinkles at its own pace) and fade near the end
         alpha[k] = Math.min(1, (1 - age) * 2.2) * Math.min(1, age * 14) * (0.55 + 0.45 * Math.sin(now * (5 + (k % 7)) + k * 2.3));
         size[k] = base[k] * (1 - age * 0.25);
@@ -210,5 +263,5 @@ export function createFx(host) {
     renderer.dispose(); renderer.forceContextLoss(); canvas.remove();   // (hand the graphics memory back right away)
   }
 
-  return { burst, emit, resize, dispose };
+  return { burst, emit, resize, dispose, setStyle, canvas };
 }

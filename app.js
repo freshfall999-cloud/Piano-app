@@ -20,7 +20,7 @@
     labels: $("labels"), start: $("start"), restart: $("restart"), score: $("score"),
     streak: $("streak"), mic: $("mic"), sens: $("sens"), dClef: $("dClef"), dLedger: $("dLedger"), dAcc: $("dAcc"), dNames: $("dNames"), acc: $("acc"), midi: $("midi"), hint: $("hint"), results: $("results"),
     ready: $("ready"), pause: $("pause"), micText: $("micText"), micLvl: $("micLvl"), prog: $("progFill"), streakBox: $("streakBox"),
-    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), fx3d: $("fx3d"), look: $("look"), sharp: $("sharp"), band: $("band"), scoreBox: $("score").parentNode,
+    ignoreTalk: $("ignoreTalk"), finder: $("finder"), level: $("level"), view: $("view"), listener: $("listener"), pedal: $("pedal"), sfx: $("sfx"), fx3d: $("fx3d"), sharp: $("sharp"), band: $("band"), scoreBox: $("score").parentNode,
   };
 
   const HINT = ui.hint.textContent;
@@ -664,10 +664,10 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=13").then(m => {
+    fxLoading = import("./fx3d.js?v=14").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
-      fx = m.createFx(canvas); fx.resize(W, H, pixelRatio());
+      fx = m.createFx(canvas); fx.resize(W, H, pixelRatio()); applyFx(false);
     }).catch(e => { fxLoading = null; console.warn("3D effects unavailable:", e); ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(not available on this device)"; });
   }
   function burst(midi, color, big) {
@@ -687,7 +687,7 @@
   function bump(el) { el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump"); }
   function registerHit(n, perfect) {
     n.state = "hit"; hits++; streak++; bestStreak = Math.max(bestStreak, streak);
-    burst(n.midi, perfect ? (red ? "#ff7088" : "#8dffb0") : COLORS[n.hand] || "#39b6ff", streak >= 5 && streak % 5 === 0);
+    burst(n.midi, perfect ? (red ? tint(COLORS.right, 0.35) : "#8dffb0") : COLORS[n.hand] || "#39b6ff", streak >= 5 && streak % 5 === 0);
     bump(ui.scoreBox); if (streak > 1) bump(ui.streakBox);
     if (streak >= 5 && streak % 5 === 0) sfx("streak"); else if (perfect) sfx("perfect");
     if (streak >= 5 && streak % 5 === 0) streakAt = performance.now();
@@ -1488,6 +1488,7 @@
     const kbH = sheetOn ? Math.max(80, Math.min(H * 0.19, 150)) : Math.max(90, Math.min(H * 0.26, 200));
     kbTop = H - kbH;
     if (fx) fx.resize(W, H, dpr);
+    bloomSize();
     let whites = 0;
     grad = null;
     for (let m = LOW; m <= HIGH; m++) if (!isBlack(m)) whites++;
@@ -1503,13 +1504,80 @@
   const COLORS = { right: "#39b6ff", left: "#ffa23a" };
   const LIGHT = { "#39b6ff": "#8fd8ff", "#ffa23a": "#ffd08f", "#e2495b": "#ff8e9b" };
   const DARK = { "#39b6ff": "#1f86c9", "#ffa23a": "#d9761a", "#e2495b": "#b02a3b" };
-  // How the falling notes look: glowing red on black (like piano videos), or the original blue and orange
-  const LOOKS = { red: { right: "#ff2448", left: "#d10f3a" }, classic: { right: "#39b6ff", left: "#ffa23a" } };
-  let red = true;
-  function setLook(v) {
-    red = v !== "classic"; Object.assign(COLORS, LOOKS[red ? "red" : "classic"]);
-    ui.look.value = red ? "red" : "classic"; grad = null;
-    try { localStorage.setItem("keyfall:look", ui.look.value); } catch (e) {}
+  // ---------- Effects: presets, colours, particles, bloom and light rays ----------
+  // "red" means the glowing look (lit notes on black); only the Classic preset uses the original flat look.
+  const PRESETS = {
+    trails:   { right: "#ff2448", left: "#d10f3a", particle: "#ffd6de", motion: "trails",   amount: 1,   size: 1,   bloom: "soft",   rays: false },
+    fountain: { right: "#ff3b30", left: "#ff9500", particle: "#ffd27a", motion: "fountain", amount: 1,   size: 1.2, bloom: "soft",   rays: true },
+    embers:   { right: "#ff5a1f", left: "#e8300c", particle: "#ffae42", motion: "embers",   amount: 1,   size: 1.3, bloom: "strong", rays: false },
+    smoke:    { right: "#43b8ff", left: "#3a6bff", particle: "#e2f4ff", motion: "smoke",    amount: 1,   size: 1,   bloom: "soft",   rays: true },
+    shock:    { right: "#b84dff", left: "#ff3fbf", particle: "#f0c8ff", motion: "shock",    amount: 1,   size: 1.1, bloom: "strong", rays: true },
+    classic:  { right: "#39b6ff", left: "#ffa23a", particle: "#cfeaff", motion: "trails",   amount: 0.7, size: 1,   bloom: "off",    rays: false, classic: true },
+  };
+  let red = true, FX = { preset: "trails", ...PRESETS.trails };
+  const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const rgba = (h, a) => { const [r, g, b] = hexRgb(h); return `rgba(${r},${g},${b},${a})`; };
+  const tint = (h, m, a = 1) => { const [r, g, b] = hexRgb(h).map(v => Math.round(v + (255 - v) * m)); return `rgba(${r},${g},${b},${a})`; };   // toward white
+  const shade = (h, m) => { const [r, g, b] = hexRgb(h).map(v => Math.round(v * m)); return `rgb(${r},${g},${b})`; };                       // toward black
+  function applyFx(save = true) {
+    red = !FX.classic; COLORS.right = FX.right; COLORS.left = FX.left; grad = null;
+    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount, size: FX.size });
+    $("fxPreset").value = FX.preset; $("fxRight").value = FX.right; $("fxLeft").value = FX.left; $("fxParticle").value = FX.particle;
+    $("fxMotion").value = FX.motion; $("fxAmount").value = FX.amount; $("fxSize").value = FX.size; $("fxBloom").value = FX.bloom; $("fxRays").checked = !!FX.rays;
+    $("fxAmountVal").textContent = Math.round(FX.amount * 100) + "%"; $("fxSizeVal").textContent = Math.round(FX.size * 100) + "%";
+    bloomSetup();
+    if (save) try { localStorage.setItem("keyfall:fxset", JSON.stringify(FX)); } catch (e) {}
+  }
+  // Bloom: the bright things (notes, light, particles) are drawn again, small, on a layer on top that the browser
+  // blurs and adds as light: they glow softly into the dark.
+  let bloomCv = null, bctx = null;
+  const BS = 0.25;                                     // the glow layer's size (a quarter: it is blurred anyway)
+  function bloomSetup() {
+    const on = red && FX.bloom !== "off";
+    if (!on) { if (bloomCv) bloomCv.hidden = true; return; }
+    if (!bloomCv) { bloomCv = document.createElement("canvas"); bloomCv.className = "bloom"; bloomCv.setAttribute("aria-hidden", "true"); canvas.after(bloomCv); bctx = bloomCv.getContext("2d"); }
+    if (fx && fx.canvas && fx.canvas.nextSibling !== bloomCv) fx.canvas.after(bloomCv);
+    bloomCv.hidden = false;
+    bloomCv.style.opacity = FX.bloom === "strong" ? "1" : "0.65";
+    bloomCv.style.filter = `blur(${FX.bloom === "strong" ? 9 : 6}px)`;
+    bloomSize();
+  }
+  function bloomSize() { if (bloomCv) { bloomCv.width = Math.max(1, Math.round(W * BS)); bloomCv.height = Math.max(1, Math.round(H * BS)); } }
+  const glowList = [];                                 // what glows this frame: [kind, ...]
+  function renderBloom() {
+    if (!bloomCv || bloomCv.hidden) { glowList.length = 0; return; }
+    const b = bctx;
+    b.setTransform(1, 0, 0, 1, 0, 0); b.clearRect(0, 0, bloomCv.width, bloomCv.height);
+    b.setTransform(BS, 0, 0, BS, 0, 0); b.globalCompositeOperation = "lighter";
+    for (const g of glowList) {
+      if (g[0] === "note") { b.globalAlpha = g[6]; b.fillStyle = g[5]; b.fillRect(g[1], g[2], g[3], g[4]); }
+      else if (g[0] === "flare") { const r = g[3] * 1.6, fl = b.createRadialGradient(g[1], g[2], 0, g[1], g[2], r); fl.addColorStop(0, "rgba(255,255,255,1)"); fl.addColorStop(0.35, rgba(g[4], 0.8)); fl.addColorStop(1, rgba(g[4], 0)); b.globalAlpha = 1; b.fillStyle = fl; b.fillRect(g[1] - r, g[2] - r, r * 2, r * 2); }
+      else if (g[0] === "rail") { b.globalAlpha = 0.7; b.fillStyle = g[1]; b.fillRect(0, kbTop - 4, W, 4); }
+    }
+    glowList.length = 0;
+    b.globalAlpha = 1;
+    if (fx && fx.canvas) { b.setTransform(1, 0, 0, 1, 0, 0); try { b.drawImage(fx.canvas, 0, 0, bloomCv.width, bloomCv.height); } catch (e) {} }   // the particles glow too
+    b.globalCompositeOperation = "source-over";
+  }
+  // Light rays: a beam of light from each playing key up into the dark, with a few thin rays fanning out
+  function drawRays(now) {
+    if (!red || !FX.rays) return;
+    ctx.globalCompositeOperation = "lighter";
+    for (const m of sounding()) {
+      if (m < LOW || m > HIGH) continue;
+      const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"], h = kbTop * 0.97, fl = 0.85 + 0.15 * Math.sin(now * 0.011 + m);
+      const g = ctx.createLinearGradient(0, kbTop, 0, kbTop - h);
+      g.addColorStop(0, tint(c, 0.45, 0.32 * fl)); g.addColorStop(0.35, rgba(c, 0.12 * fl)); g.addColorStop(1, rgba(c, 0));
+      ctx.fillStyle = g; ctx.beginPath();
+      ctx.moveTo(x - k.w * 0.35, kbTop); ctx.lineTo(x + k.w * 0.35, kbTop); ctx.lineTo(x + k.w * 1.8, kbTop - h); ctx.lineTo(x - k.w * 1.8, kbTop - h); ctx.closePath(); ctx.fill();
+      for (let i = 0; i < 6; i++) {                     // thin rays, slowly turning
+        const ang = (i - 2.5) * 0.11 + Math.sin(now * 0.0006 * (i + 1) + m * 1.3) * 0.06, len = h * (0.55 + 0.45 * (((i * 37 + m) % 7) / 7));
+        const ex = x + Math.sin(ang) * len, ey = kbTop - Math.cos(ang) * len, rg = ctx.createLinearGradient(x, kbTop, ex, ey);
+        rg.addColorStop(0, tint(c, 0.6, 0.22 * fl)); rg.addColorStop(1, rgba(c, 0));
+        ctx.strokeStyle = rg; ctx.lineWidth = 1.2 + (i % 3) * 0.8; ctx.beginPath(); ctx.moveTo(x, kbTop - 2); ctx.lineTo(ex, ey); ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
   }
 
   function rrect(x, y, w, h, r) {
@@ -1538,7 +1606,7 @@
   }
   function keyFill(color, k) {                        // a lit key: the colour, brighter at the top, with a soft sheen
     const gr = ctx.createLinearGradient(0, kbTop, 0, kbTop + k.h);
-    gr.addColorStop(0, color); gr.addColorStop(0.75, color); gr.addColorStop(1, k.black ? (red ? "#3a0610" : "#0d2a3f") : "#ffffff");
+    gr.addColorStop(0, color); gr.addColorStop(0.75, color); gr.addColorStop(1, k.black ? (red ? shade(COLORS.right, 0.2) : "#0d2a3f") : "#ffffff");
     return gr;
   }
 
@@ -2276,6 +2344,7 @@
     if (!red && !(song && !drill && !train && !rec && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
+    drawRays(now);
     // light beams rising from keys that were just hit
     for (let i = beams.length - 1; i >= 0; i--) {
       const bm = beams[i], a = (now - bm.t) / 420;
@@ -2308,12 +2377,13 @@
           ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = a0;
           if (near) { ctx.shadowColor = c; ctx.shadowBlur = 24; }
           const gr = ctx.createLinearGradient(x0, 0, x0 + w0, 0);
-          gr.addColorStop(0, c); gr.addColorStop(0.5, n.state === "miss" ? c : n.hand === "left" ? "#ff4a70" : "#ff5c76"); gr.addColorStop(1, c);
+          gr.addColorStop(0, c); gr.addColorStop(0.5, n.state === "miss" ? c : tint(c, 0.25)); gr.addColorStop(1, c);
           ctx.fillStyle = gr; rrect(x0, yb - h, w0, h, Math.min(6, w0 / 2)); ctx.fill();
           ctx.shadowBlur = 0;
+          if (n.state !== "miss" && yb > 0 && yb - h < kbTop) glowList.push(["note", x0, Math.max(0, yb - h), w0, Math.min(yb, kbTop) - Math.max(0, yb - h), c, a0 * (n.state === "hit" ? 0.4 : 1)]);
           if (n.state !== "miss") {                      // the white-hot middle
             const core = ctx.createLinearGradient(x0, 0, x0 + w0, 0);
-            core.addColorStop(0.2, "rgba(255,210,220,0)"); core.addColorStop(0.5, "rgba(255,215,225,.45)"); core.addColorStop(0.8, "rgba(255,210,220,0)");
+            core.addColorStop(0.2, tint(c, 0.8, 0)); core.addColorStop(0.5, tint(c, 0.82, 0.45)); core.addColorStop(0.8, tint(c, 0.8, 0));
             ctx.fillStyle = core; rrect(x0 + 2, yb - h + 3, w0 - 4, Math.max(2, h - 6), 3); ctx.fill();
           }
           if (k.black) { ctx.fillStyle = "rgba(0,0,0,.18)"; rrect(x0, yb - h, w0, h, Math.min(6, w0 / 2)); ctx.fill(); }
@@ -2414,22 +2484,24 @@
     }
     ctx.fillStyle = grad.shade; ctx.fillRect(0, kbTop, W, 14);     // shadow under the rail
     // the hit line: a glowing rail the notes land on
-    const rail = red ? "#ff2448" : "#7fd4ff";
+    const rail = red ? COLORS.right : "#7fd4ff";
+    if (red) glowList.push(["rail", rail]);
     ctx.shadowColor = rail; ctx.shadowBlur = 12;
     ctx.fillStyle = rail; ctx.fillRect(0, kbTop - 3, W, 2);
     ctx.shadowBlur = 0;
-    if (red) { ctx.fillStyle = "rgba(255,200,210,.55)"; ctx.fillRect(0, kbTop - 2.5, W, 1); }
+    if (red) { ctx.fillStyle = tint(rail, 0.75, 0.55); ctx.fillRect(0, kbTop - 2.5, W, 1); }
     // a flare of light where each sounding key meets the notes: a hot core and a thin streak along the rail
     ctx.globalCompositeOperation = "lighter";
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, y = kbTop - 3, r = Math.max(14, k.w * 1.7), c = COLORS[m < 60 ? "left" : "right"];
       const fl = ctx.createRadialGradient(x, y, 0, x, y, r);
-      fl.addColorStop(0, "rgba(255,255,255,.9)"); fl.addColorStop(0.2, red ? "rgba(255,170,185,.6)" : "rgba(200,235,255,.6)");
+      fl.addColorStop(0, "rgba(255,255,255,.9)"); fl.addColorStop(0.2, red ? tint(c, 0.6, 0.6) : "rgba(200,235,255,.6)");
+      if (red) glowList.push(["flare", x, y, r, c]);
       fl.addColorStop(0.5, c + "40"); fl.addColorStop(1, c + "00");
       ctx.fillStyle = fl; ctx.fillRect(x - r, y - r, r * 2, r * 2);
       const sw = Math.max(60, k.w * 5), st = ctx.createLinearGradient(x - sw, 0, x + sw, 0);
-      st.addColorStop(0, c + "00"); st.addColorStop(0.5, "rgba(255,235,240,.75)"); st.addColorStop(1, c + "00");
+      st.addColorStop(0, c + "00"); st.addColorStop(0.5, tint(c, 0.85, 0.75)); st.addColorStop(1, c + "00");
       ctx.fillStyle = st; ctx.fillRect(x - sw, y - 1.5, sw * 2, 3);
     }
     ctx.globalCompositeOperation = "source-over";
@@ -2449,6 +2521,7 @@
     if (drill) drawStaff();
     if (train) drawTraining();
     if (rec) drawRecording();
+    renderBloom();
     // hit feedback
 
     ctx.textAlign = "center";
@@ -2460,17 +2533,17 @@
       ctx.globalAlpha = 1 - a * a * a;
       ctx.font = `800 ${Math.round(17 * pop)}px system-ui, sans-serif`;
       ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.strokeText(f.text.toUpperCase(), x, y);
-      ctx.shadowColor = red ? "#ff2448" : perfect ? "#5fd38a" : "#ffb02e"; ctx.shadowBlur = 14;
-      ctx.fillStyle = red ? (perfect ? "#ffffff" : "#ffb3c0") : perfect ? "#c8ffd8" : "#ffe08a";
+      ctx.shadowColor = red ? COLORS.right : perfect ? "#5fd38a" : "#ffb02e"; ctx.shadowBlur = 14;
+      ctx.fillStyle = red ? (perfect ? "#ffffff" : tint(COLORS.right, 0.6)) : perfect ? "#c8ffd8" : "#ffe08a";
       ctx.fillText(f.text.toUpperCase(), x, y); ctx.shadowBlur = 0;
     }
     if (streak >= 5 && streakAt && now - streakAt < 1100) {
       const a = (now - streakAt) / 1100, pop = 1 + 0.35 * Math.max(0, 1 - a * 5);
       ctx.globalAlpha = a < 0.75 ? 1 : 1 - (a - 0.75) / 0.25;
       ctx.font = `900 ${Math.round(40 * pop)}px system-ui, sans-serif`;
-      ctx.shadowColor = red ? "#ff2448" : "#ff9f43"; ctx.shadowBlur = 28;
+      ctx.shadowColor = red ? COLORS.right : "#ff9f43"; ctx.shadowBlur = 28;
       ctx.fillStyle = "#fff"; ctx.fillText(`${streak} IN A ROW`, W / 2, kbTop * 0.4);
-      ctx.shadowBlur = 0; ctx.font = "700 15px system-ui, sans-serif"; ctx.fillStyle = red ? "#ff8a9c" : "#ffcc4d";
+      ctx.shadowBlur = 0; ctx.font = "700 15px system-ui, sans-serif"; ctx.fillStyle = red ? tint(COLORS.right, 0.45) : "#ffcc4d";
       ctx.fillText("🔥 STREAK", W / 2, kbTop * 0.4 - 46 * pop);
     }
     ctx.shadowBlur = 0;
@@ -2491,7 +2564,7 @@
       if (time < 0 && state === "running") {
         const c = Math.ceil(-time), f = -time - Math.floor(-time);         // each number pops in and fades
         ctx.font = `900 ${Math.round(70 + 40 * f)}px system-ui, sans-serif`; ctx.globalAlpha = 0.2 + 0.7 * f;
-        ctx.shadowColor = red ? "#ff2448" : "#39b6ff"; ctx.shadowBlur = 30; ctx.fillStyle = "#fff";
+        ctx.shadowColor = red ? COLORS.right : "#39b6ff"; ctx.shadowBlur = 30; ctx.fillStyle = "#fff";
         ctx.fillText(c, W / 2, kbTop / 2); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
       }
 
@@ -2507,9 +2580,9 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
-      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 650, m); } catch (e) {} continue; }
-      for (let q = Math.floor(260 * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
-        vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.5 + Math.random() * 0.6, c: Math.random() < 0.45 ? "#ffffff" : c });
+      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, m); } catch (e) {} continue; }
+      for (let q = Math.floor(260 * FX.amount * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
+        vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: (0.5 + Math.random() * 0.6) * FX.size, c: Math.random() < 0.45 ? "#ffffff" : FX.particle });
     }
     if (particles.length > 5000) particles.splice(0, particles.length - 5000);
   }
@@ -3230,8 +3303,22 @@
   ui.sfx.onchange = () => { try { localStorage.setItem("keyfall:sfx", ui.sfx.checked ? "1" : "0"); } catch (e) {} };
   if (reduceMotion) { ui.fx3d.checked = false; ui.fx3d.disabled = true; $("fx3dNote").textContent = "(off: your device asks for less motion)"; }
   try { if (localStorage.getItem("keyfall:fx3d") === "0") ui.fx3d.checked = false; } catch (e) {}
-  try { setLook(localStorage.getItem("keyfall:look") || "red"); } catch (e) { setLook("red"); }
-  ui.look.onchange = () => setLook(ui.look.value);
+  try {
+    const saved = JSON.parse(localStorage.getItem("keyfall:fxset") || "null");
+    if (saved && saved.right) FX = { ...PRESETS.trails, ...saved };
+    else if (localStorage.getItem("keyfall:look") === "classic") FX = { preset: "classic", ...PRESETS.classic };
+  } catch (e) {}
+  applyFx(false);
+  $("fxPreset").onchange = () => { const p = $("fxPreset").value; if (PRESETS[p]) FX = { preset: p, ...PRESETS[p] }; else FX.preset = "custom"; applyFx(); };
+  const custom = (key, val) => { FX[key] = val; FX.preset = "custom"; applyFx(); };
+  $("fxRight").oninput = () => custom("right", $("fxRight").value);
+  $("fxLeft").oninput = () => custom("left", $("fxLeft").value);
+  $("fxParticle").oninput = () => custom("particle", $("fxParticle").value);
+  $("fxMotion").onchange = () => custom("motion", $("fxMotion").value);
+  $("fxAmount").oninput = () => custom("amount", +$("fxAmount").value);
+  $("fxSize").oninput = () => custom("size", +$("fxSize").value);
+  $("fxBloom").onchange = () => custom("bloom", $("fxBloom").value);
+  $("fxRays").onchange = () => custom("rays", $("fxRays").checked);
   try { const v = localStorage.getItem("keyfall:sharp"); if (v && v !== ui.sharp.value) { ui.sharp.value = v; layout(); } } catch (e) {}
   ui.sharp.onchange = () => { perf.n = perf.sum = 0; $("sharpNote").textContent = ""; try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {} layout(); };
   ui.fx3d.onchange = () => { try { localStorage.setItem("keyfall:fx3d", ui.fx3d.checked ? "1" : "0"); } catch (e) {} setFx(ui.fx3d.checked); };
