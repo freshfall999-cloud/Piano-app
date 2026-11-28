@@ -1592,14 +1592,20 @@
     const g = {};
     g.bg = ctx.createLinearGradient(0, 0, 0, kbTop);
     g.bg.addColorStop(0, "#161a29"); g.bg.addColorStop(0.7, "#11141e"); g.bg.addColorStop(1, "#0c0e15");
-    g.white = ctx.createLinearGradient(0, kbTop, 0, H);
-    g.white.addColorStop(0, "#d9dce6"); g.white.addColorStop(0.06, "#ffffff"); g.white.addColorStop(0.85, "#f1f2f7"); g.white.addColorStop(1, "#c9ccd8");
-    g.black = ctx.createLinearGradient(0, kbTop, 0, kbTop + (H - kbTop) * 0.62);
-    g.black.addColorStop(0, "#0a0b10"); g.black.addColorStop(0.1, "#2a2d39"); g.black.addColorStop(0.88, "#14161d"); g.black.addColorStop(1, "#050608");
+    const kh = H - kbTop;
+    g.white = ctx.createLinearGradient(0, kbTop, 0, H);        // ivory: in the fallboard's shadow at the back, lit toward you
+    g.white.addColorStop(0, "#b9b7b1"); g.white.addColorStop(0.05, "#ecebe6"); g.white.addColorStop(0.35, "#fbfaf7");
+    g.white.addColorStop(0.9, "#f3f2ee"); g.white.addColorStop(1, "#e4e2dc");
+    g.black = ctx.createLinearGradient(0, kbTop, 0, kbTop + kh * 0.62);   // ebony
+    g.black.addColorStop(0, "#050506"); g.black.addColorStop(0.08, "#1b1b21"); g.black.addColorStop(0.75, "#141418"); g.black.addColorStop(1, "#0b0b0e");
     g.lip = ctx.createLinearGradient(0, H - 10, 0, H);         // the white keys' front edge
-    g.lip.addColorStop(0, "#d4d7e0"); g.lip.addColorStop(1, "#9ea2b0");
-    g.face = ctx.createLinearGradient(0, kbTop + (H - kbTop) * 0.5, 0, kbTop + (H - kbTop) * 0.64);   // the black keys' sloped front
-    g.face.addColorStop(0, "#2c2f3a"); g.face.addColorStop(1, "#4a4e5c");
+    g.lip.addColorStop(0, "#d6d3ca"); g.lip.addColorStop(1, "#a29e94");
+    g.face = ctx.createLinearGradient(0, kbTop + kh * 0.5, 0, kbTop + kh * 0.64);   // the black keys' sloped front
+    g.face.addColorStop(0, "#26262d"); g.face.addColorStop(1, "#3d3d46");
+    g.gloss = ctx.createLinearGradient(0, kbTop + kh * 0.25, 0, kbTop + kh * 0.58);   // the lacquer's reflection
+    g.gloss.addColorStop(0, "rgba(255,255,255,0)"); g.gloss.addColorStop(0.7, "rgba(255,255,255,.16)"); g.gloss.addColorStop(1, "rgba(255,255,255,.05)");
+    g.felt = ctx.createLinearGradient(0, kbTop - 1, 0, kbTop + 4);    // the red felt strip at the back of the keys
+    g.felt.addColorStop(0, "#3a0710"); g.felt.addColorStop(1, "#14030a");
     g.shade = ctx.createLinearGradient(0, kbTop, 0, kbTop + 14);
     g.shade.addColorStop(0, "rgba(0,0,0,.45)"); g.shade.addColorStop(1, "rgba(0,0,0,0)");
     return g;
@@ -2428,7 +2434,7 @@
       ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("Ped.", x + 31, y + 12.5); ctx.textBaseline = "alphabetic";
     }
     // keyboard
-    ctx.fillStyle = "#07080c"; ctx.fillRect(0, kbTop - 3, W, H - kbTop + 3);
+    ctx.fillStyle = "#020203"; ctx.fillRect(0, kbTop - 3, W, H - kbTop + 3);
     const target = new Set();
     if (song && state !== "idle" && mode() === "practice") nextGroup().forEach(n => {
       if (n.start - time < 0.01) target.add(n.midi);
@@ -2449,40 +2455,53 @@
       if (d !== want) { d += (want - d) * Math.min(1, drawDt / 0.03); if (Math.abs(want - d) < 0.03) d = want; keyDepth.set(k.midi, d); }
       const hint = k.midi === badKey || flash ? (red ? "#b0b4c8" : "#ff6b7d") : target.has(k.midi) ? (pass ? "#2e9d5f" : "#8fe9b0")
         : learned ? (pass ? "#34507a" : "#cfe2fb") : null;
-      const kx = k.x + (pass ? 0 : 1), kw = k.w - (pass ? 0 : 2);
+      const kx = k.x + (pass ? 0 : 0.6), kw = k.w - (pass ? 0 : 1.2);
       if (!pass) {
-        const top = kbTop - 2 + d * 3, bottom = kbTop + k.h - 3 + d * 2, lip = 6 * (1 - d);   // the front edge shows until the key is down
+        const top = kbTop - 2 + d * 3, bottom = kbTop + k.h - 2 + d * 2, lip = 7 * (1 - d);   // the front edge shows until the key is down
         if (hint && target.has(k.midi)) { ctx.shadowColor = hint; ctx.shadowBlur = 14; }
         ctx.fillStyle = hint ? keyFill(hint, k) : grad.white;
-        rrect(kx, top, kw, bottom - top, 5); ctx.fill();
+        rrect(kx, top, kw, bottom - top, 4); ctx.fill();
         ctx.shadowBlur = 0;
-        if (lip > 0.5) { ctx.fillStyle = grad.lip; ctx.fillRect(kx + 1, bottom - lip, kw - 2, lip); }
+        if (lip > 0.5) {
+          ctx.fillStyle = grad.lip; rrect(kx, bottom - lip, kw, lip, 3); ctx.fill();
+          ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.fillRect(kx + 1, bottom - lip, kw - 2, 1);        // the edge catching the light
+        }
+        if (!hint) {                                     // a sheen on the left edge, a soft shadow on the right
+          ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.fillRect(kx, top + 4, 1, bottom - top - lip - 5);
+          ctx.fillStyle = "rgba(0,0,0,.07)"; ctx.fillRect(kx + kw - 1.5, top + 4, 1.5, bottom - top - lip - 5);
+        }
         if (d > 0) {                                     // down between its neighbours: in their shadow at the top and sides
           const sh = ctx.createLinearGradient(0, top, 0, top + k.h * 0.45);
           sh.addColorStop(0, `rgba(0,0,0,${0.42 * d})`); sh.addColorStop(1, "rgba(0,0,0,0)");
           ctx.fillStyle = sh; ctx.fillRect(kx, top, kw, k.h * 0.45);
           ctx.fillStyle = `rgba(0,0,0,${0.22 * d})`; ctx.fillRect(kx, top, 2, bottom - top); ctx.fillRect(kx + kw - 2, top, 2, bottom - top);
-        } else if (!hint) { ctx.fillStyle = "rgba(0,0,0,.05)"; ctx.fillRect(kx + kw - 1, kbTop, 1, k.h - 3); }
-      } else {
-        const bh = k.h + d * 2, face = bh * (0.11 - 0.07 * d);                  // the sloped front shrinks as it goes down
-        ctx.fillStyle = "rgba(0,0,0,.45)"; rrect(kx - 1.5, kbTop - 2, kw + 3, bh + 4, 3); ctx.fill();   // its shadow on the white keys
-        ctx.fillStyle = hint ? keyFill(hint, k) : grad.black;
-        rrect(kx, kbTop - 2 + d * 2, kw, bh, 3); ctx.fill();
-        if (!hint) {
-          ctx.fillStyle = `rgba(255,255,255,${0.13 - 0.07 * d})`;      // a polished bevel catching the light
-          rrect(kx + kw * 0.14, kbTop + 4 + d * 3, kw * 0.72, (bh - face) * 0.82, 2); ctx.fill();
-          ctx.fillStyle = grad.face; ctx.fillRect(kx + 1, kbTop - 2 + d * 2 + bh - face, kw - 2, face);
         }
-        if (d > 0) { ctx.fillStyle = `rgba(0,0,0,${0.3 * d})`; rrect(kx, kbTop - 2 + d * 2, kw, bh, 3); ctx.fill(); }
+      } else {
+        const bh = k.h + d * 2, face = bh * (0.12 - 0.08 * d), y0 = kbTop - 2 + d * 2;        // the sloped front shrinks as it goes down
+        ctx.save();                                      // a soft shadow cast on the white keys below
+        ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4 - d * 2; ctx.shadowOffsetX = 1;
+        ctx.fillStyle = "#000"; rrect(kx, y0, kw, bh, 3); ctx.fill(); ctx.restore();
+        ctx.fillStyle = hint ? keyFill(hint, k) : grad.black;
+        rrect(kx, y0, kw, bh, 3); ctx.fill();
+        if (!hint) {
+          ctx.fillStyle = "rgba(255,255,255,.07)"; ctx.fillRect(kx + 1, y0 + 2, Math.max(1, kw * 0.12), bh - face - 3);    // bevels
+          ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(kx + kw - Math.max(1, kw * 0.12) - 1, y0 + 2, Math.max(1, kw * 0.12), bh - face - 3);
+          ctx.globalAlpha = 1 - 0.6 * d; ctx.fillStyle = grad.gloss;                                             // lacquer
+          rrect(kx + kw * 0.2, y0 + 3, kw * 0.6, bh - face - 5, 2); ctx.fill(); ctx.globalAlpha = 1;
+          ctx.fillStyle = grad.face; ctx.fillRect(kx + 0.5, y0 + bh - face, kw - 1, face);
+          ctx.fillStyle = "rgba(255,255,255,.22)"; ctx.fillRect(kx + 1, y0 + bh - face, kw - 2, 1);
+        }
+        if (d > 0) { ctx.fillStyle = `rgba(0,0,0,${0.3 * d})`; rrect(kx, y0, kw, bh, 3); ctx.fill(); }
       }
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
       if (!text || k.w < 11) continue;
       ctx.font = `${Math.max(9, Math.min(13, k.w * 0.55))}px system-ui, sans-serif`;
-      ctx.fillStyle = pass ? "#9aa0b8" : "#5a6078";
+      ctx.fillStyle = pass ? "#8d8f9a" : "#8a8781";
       ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10 + (keyDepth.get(k.midi) || 0) * 2);
     }
-    ctx.fillStyle = grad.shade; ctx.fillRect(0, kbTop, W, 14);     // shadow under the rail
+    ctx.fillStyle = grad.felt; ctx.fillRect(0, kbTop - 1, W, 4);   // the felt at the back of the keys
+    ctx.fillStyle = grad.shade; ctx.fillRect(0, kbTop + 3, W, 14);  // shadow under the rail
     // the hit line: a glowing rail the notes land on
     const rail = red ? COLORS.right : "#7fd4ff";
     if (red) glowList.push(["rail", rail]);
@@ -2490,19 +2509,14 @@
     ctx.fillStyle = rail; ctx.fillRect(0, kbTop - 3, W, 2);
     ctx.shadowBlur = 0;
     if (red) { ctx.fillStyle = tint(rail, 0.75, 0.55); ctx.fillRect(0, kbTop - 2.5, W, 1); }
-    // a flare of light where each sounding key meets the notes: a hot core and a thin streak along the rail
+    // where a playing key meets the notes: only a thin line of light along the rail (no glowing ball)
     ctx.globalCompositeOperation = "lighter";
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
-      const k = keyOf(m), x = k.x + k.w / 2, y = kbTop - 3, r = Math.max(14, k.w * 1.7), c = COLORS[m < 60 ? "left" : "right"];
-      const fl = ctx.createRadialGradient(x, y, 0, x, y, r);
-      fl.addColorStop(0, "rgba(255,255,255,.9)"); fl.addColorStop(0.2, red ? tint(c, 0.6, 0.6) : "rgba(200,235,255,.6)");
-      if (red) glowList.push(["flare", x, y, r, c]);
-      fl.addColorStop(0.5, c + "40"); fl.addColorStop(1, c + "00");
-      ctx.fillStyle = fl; ctx.fillRect(x - r, y - r, r * 2, r * 2);
-      const sw = Math.max(60, k.w * 5), st = ctx.createLinearGradient(x - sw, 0, x + sw, 0);
-      st.addColorStop(0, c + "00"); st.addColorStop(0.5, tint(c, 0.85, 0.75)); st.addColorStop(1, c + "00");
-      ctx.fillStyle = st; ctx.fillRect(x - sw, y - 1.5, sw * 2, 3);
+      const k = keyOf(m), x = k.x + k.w / 2, y = kbTop - 2, c = COLORS[m < 60 ? "left" : "right"];
+      const sw = Math.max(40, k.w * 3), st = ctx.createLinearGradient(x - sw, 0, x + sw, 0);
+      st.addColorStop(0, c + "00"); st.addColorStop(0.5, red ? tint(c, 0.85, 0.8) : "rgba(220,240,255,.8)"); st.addColorStop(1, c + "00");
+      ctx.fillStyle = st; ctx.fillRect(x - sw, y - 1, sw * 2, 2);
     }
     ctx.globalCompositeOperation = "source-over";
     // sparks from hits
