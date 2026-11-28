@@ -315,3 +315,8 @@ button.primary:hover { background: linear-gradient(#ff6a83, #e01844); box-shadow
 .gatecard { background: linear-gradient(165deg, rgba(30, 26, 36, .95), rgba(10, 9, 13, .97)); border: 1px solid rgba(255, 36, 72, .22); color: #d3d1de; }
 #gatePw, .hfrow input, .pfield input { background: #0b0a0e; border-color: rgba(255, 255, 255, .12); }
 .printbar { background: linear-gradient(#1a1720, #0e0d12); }
+
+/* pitch black stage: the bar above it and the page behind it are black too */
+body { background: #000; }
+header { background: #000; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, .06); }
+main { background: #000; }

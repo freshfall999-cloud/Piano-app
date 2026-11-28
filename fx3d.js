@@ -107,7 +107,7 @@ export function createFx(host) {
     if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
     // only tiny lights: a puff of them (no big sparks, no glowing blobs)
-    smoke(wx, wy, c, keyW * 1.3, big ? 120 : 50, Math.random() * 10, 1.4);
+    smoke(wx, wy, c, keyW * 1.3, big ? 500 : 220, Math.random() * 10, 1.4);
     kick();
   }
 
@@ -140,12 +140,13 @@ export function createFx(host) {
       if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
       else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
       born[k] = now; life[k] = 2.4 + Math.random() * 2.2;
-      base[k] = 1.4 + Math.random() * 1.4; glitter[k] = 2; seed[k] = sd + Math.random() * 0.15;
+      // most are tiny pinpoints; one in five is a brighter sparkle
+      base[k] = Math.random() < 0.2 ? 1.4 + Math.random() * 1.2 : 0.7 + Math.random() * 0.5; glitter[k] = 2; seed[k] = sd + Math.random() * 0.15;
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
   const tally = new Map();
-  function emit(x, y, color, keyW, dt, rate = 140, key = 0) {
+  function emit(x, y, color, keyW, dt, rate = 650, key = 0) {
     if (lost) return;
     const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
     tally.set(key, want - n);

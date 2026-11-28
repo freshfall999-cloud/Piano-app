@@ -664,7 +664,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=12").then(m => {
+    fxLoading = import("./fx3d.js?v=13").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio());
@@ -682,7 +682,7 @@
       particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.6, y: kbTop - 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
         life: 450 + Math.random() * 450, t: now, r: 0.5 + Math.random() * 0.7, c: Math.random() < 0.35 ? "#ffffff" : color });
     }
-    if (particles.length > 2500) particles.splice(0, particles.length - 2500);
+    if (particles.length > 5000) particles.splice(0, particles.length - 5000);
   }
   function bump(el) { el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump"); }
   function registerHit(n, perfect) {
@@ -2262,7 +2262,7 @@
     const now = performance.now();
     drawDt = lastDraw ? Math.min(0.05, (now - lastDraw) / 1000) : 0.016; lastDraw = now;
     ctx.fillStyle = red ? "#000" : grad.bg; ctx.fillRect(0, 0, W, kbTop);
-    if (red) {                                        // light from the playing keys spills over the dark stage
+    if (red && false) {                               // (pitch black: no light spilling over the stage)
       const n = sounding().size;
       ambient += ((n ? Math.min(1, 0.45 + n * 0.15) : 0) - ambient) * Math.min(1, drawDt * (n ? 10 : 2.5));
       if (ambient > 0.01) {
@@ -2273,7 +2273,7 @@
     }
     // lane guides at each C
     ctx.strokeStyle = red ? "rgba(255,255,255,.045)" : "rgba(127,212,255,.06)"; ctx.lineWidth = 1;
-    if (!(song && !drill && !train && !rec && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
+    if (!red && !(song && !drill && !train && !rec && ui.view.value === "sheet")) for (const k of keys) if (!k.black && k.midi % 12 === 0) {
       ctx.beginPath(); ctx.moveTo(k.x + 0.5, 0); ctx.lineTo(k.x + 0.5, kbTop); ctx.stroke();
     }
     // light beams rising from keys that were just hit
@@ -2507,11 +2507,11 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
-      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 140, m); } catch (e) {} continue; }
-      for (let q = Math.floor(90 * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
+      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 650, m); } catch (e) {} continue; }
+      for (let q = Math.floor(260 * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
         vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.5 + Math.random() * 0.6, c: Math.random() < 0.45 ? "#ffffff" : c });
     }
-    if (particles.length > 2500) particles.splice(0, particles.length - 2500);
+    if (particles.length > 5000) particles.splice(0, particles.length - 5000);
   }
   const perf = { n: 0, sum: 0 };
   function frame(now) {
