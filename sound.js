@@ -10,7 +10,7 @@
   const fileOf = (m, l) => `${LAYERS[l].dir}${NAMES[m % 12]}${Math.floor(m / 12) - 1}.mp3`;
   const KEEP = 10;                          // seconds kept of each recording (a held note has faded away by then)
 
-  let ac = null, out = null, sfxBus = null, reverb = null, pianoBus = null, bandBus = null, noiseBuf = null;
+  let ac = null, out = null, sfxBus = null, reverb = null, pianoBus = null, bandBus = null, noiseBuf = null, resonance = null, resWet = null;
   const bandVoices = new Set();
   const buffers = new Map(), voices = new Map();   // buffers: "layer:midi" → { buf, at }
   let loading = false;
@@ -21,16 +21,19 @@
       if (p && p.then) p.then(ok, fail);
     });
   }
-  // Keep a recording ready to play at once: one channel (the app places each note in stereo itself, and it halves
-  // the memory), starting right at the hammer's strike (no silent gap before it: no delay), at most KEEP seconds.
-  function prepare(buf) {
+  // Keep a recording ready to play at once, starting right at the hammer's strike (no silent gap before it: no
+  // delay), at most KEEP seconds. One channel (it halves the memory; the app places each note in stereo itself):
+  // the microphone nearer that part of the piano (left for the bass, right for the treble), never the two mixed,
+  // which would make the sound hollow (the two microphones are apart, so mixing them cancels some overtones).
+  function prepare(buf, m) {
     const sr = buf.sampleRate, L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    const src = m < 64 ? L : R;
     let at = 0;
-    while (at < L.length - 1 && Math.abs(L[at]) + Math.abs(R[at]) < 0.004) at++;
+    while (at < src.length - 1 && Math.abs(L[at]) + Math.abs(R[at]) < 0.004) at++;
     at = Math.max(0, at - Math.round(sr * 0.0005));
-    const len = Math.min(L.length - at, Math.round(sr * KEEP)), fade = Math.round(sr * 1.5);
+    const len = Math.min(src.length - at, Math.round(sr * KEEP)), fade = Math.round(sr * 1.5);
     const out = ac.createBuffer(1, len, sr), d = out.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = (L[at + i] + R[at + i]) * 0.5 * (len - i < fade && len >= sr * KEEP - 1 ? (len - i) / fade : 1);
+    for (let i = 0; i < len; i++) d[i] = src[at + i] * (len - i < fade && len >= sr * KEEP - 1 ? (len - i) / fade : 1);
     return out;
   }
   function load() {
@@ -44,7 +47,7 @@
       if (i >= order.length) return;
       const [l, m] = order[i++];
       fetch(fileOf(m, l)).then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).then(decode)
-        .then(buf => buffers.set(l + ":" + m, prepare(buf))).catch(() => {}).then(next);
+        .then(buf => buffers.set(l + ":" + m, prepare(buf, m))).catch(() => {}).then(next);
     };
     for (let k = 0; k < 4; k++) next();     // four downloads at a time
   }
@@ -83,9 +86,17 @@
     ac = context; out = destination; voices.clear();
     // the piano: a little warmth in the low end, the direct sound, and the hall
     pianoBus = ac.createGain(); pianoBus.gain.value = 0.9;
-    const warm = ac.createBiquadFilter(); warm.type = "lowshelf"; warm.frequency.value = 200; warm.gain.value = 2.5;
-    const hall = makeHall(), hallWet = ac.createGain(); hallWet.gain.value = 0.3;
-    pianoBus.connect(warm); warm.connect(out); warm.connect(hall); hall.connect(hallWet).connect(out);
+    const warm = ac.createBiquadFilter(); warm.type = "lowshelf"; warm.frequency.value = 120; warm.gain.value = 1.5;
+    const mud = ac.createBiquadFilter(); mud.type = "peaking"; mud.frequency.value = 320; mud.Q.value = 0.9; mud.gain.value = -2.5;
+    const presence = ac.createBiquadFilter(); presence.type = "peaking"; presence.frequency.value = 3200; presence.Q.value = 0.8; presence.gain.value = 1.5;
+    const air = ac.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = 9000; air.gain.value = 3.5;
+    warm.connect(mud).connect(presence).connect(air);
+    const hall = makeHall(), hallWet = ac.createGain(); hallWet.gain.value = 0.38;
+    pianoBus.connect(warm); air.connect(out); air.connect(hall); hall.connect(hallWet).connect(out);
+    // sympathetic resonance: with the pedal down the undamped strings ring along, a soft, long bloom
+    resonance = makeHall(3.2, 0.03); resWet = ac.createGain(); resWet.gain.value = 0;
+    const resTone = ac.createBiquadFilter(); resTone.type = "lowpass"; resTone.frequency.value = 3500;
+    air.connect(resTone).connect(resonance); resonance.connect(resWet).connect(out);
     // the band behind you: its own level, a little of the same hall
     bandBus = ac.createGain(); bandBus.gain.value = 0.55;
     const bandHall = ac.createGain(); bandHall.gain.value = 0.35;
@@ -128,7 +139,7 @@
     // the recording already sounds soft or loud; fine-tune between the three strengths
     const level = 0.8 * Math.pow(10, (vel - LAYERS[p.l].v) * 0.9);
     g.gain.setValueAtTime(level, t);
-    tone.type = "lowpass"; tone.Q.value = 0.4; tone.frequency.setValueAtTime(3500 + 15000 * vel * vel, t);
+    tone.type = "lowpass"; tone.Q.value = 0.3; tone.frequency.setValueAtTime(Math.min(20000, 7000 + 16000 * vel), t);
     // low notes a little to the left, high ones to the right, as you hear them sitting at the piano
     let node = src.connect(tone).connect(g);
     if (ac.createStereoPanner) { const pan = ac.createStereoPanner(); pan.pan.value = Math.max(-0.55, Math.min(0.55, (m - 64) / 44)); node = node.connect(pan); }
@@ -248,5 +259,6 @@
     bandVoices.clear();
   }
 
-  window.KeyfallSound = { init, noteOn, noteOff, sfx, band, bandStop, get loaded() { let n = 0; buffers.forEach((_, k) => { if (k[0] === "1") n++; }); return n; }, total: RECORDED.length };
+  function pedal(on) { if (resWet) resWet.gain.setTargetAtTime(on ? 0.22 : 0, ac.currentTime, on ? 0.05 : 0.12); }
+  window.KeyfallSound = { init, noteOn, noteOff, sfx, band, bandStop, pedal, get loaded() { let n = 0; buffers.forEach((_, k) => { if (k[0] === "1") n++; }); return n; }, total: RECORDED.length };
 })();

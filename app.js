@@ -39,7 +39,7 @@
     try { ac = new AC({ latencyHint: "interactive" }); } catch (e) { ac = new AC(); }
     // no compressor in the way (it holds the sound back a few milliseconds to look ahead): a gentle limiter
     // curve instead that only rounds off the loudest peaks, with no delay
-    master = ac.createGain(); master.gain.value = 0.9;
+    master = ac.createGain(); master.gain.value = 0.8;
     const clip = ac.createWaveShaper(), curve = new Float32Array(2048);
     for (let i = 0; i < curve.length; i++) { const x = i / (curve.length - 1) * 2 - 1, ax = Math.abs(x); curve[i] = ax < 0.75 ? x : Math.sign(x) * (0.75 + 0.25 * Math.tanh((ax - 0.75) / 0.25)); }
     clip.curve = curve;
@@ -604,6 +604,9 @@
   let song = null, state = "idle";      // idle | running | paused | done
   let time = 0, score = 0, streak = 0, bestStreak = 0, hits = 0, perfects = 0, misses = 0, wrong = 0;
   const down = new Set(), autoDown = new Map(), pedalRing = new Set(), flashes = [];
+  let songPedal = false;
+  // with the pedal down every string is free to ring along: the piano's sound blooms (the piano adds that resonance)
+  const pedalSound = () => { if (window.KeyfallSound && KeyfallSound.pedal) KeyfallSound.pedal(songPedal || midiIn.pedal); };
   let rec = null;                        // ⏺ recording your own song: { t0, notes, open, pedal, pedalAt }
 
   const mode = () => ui.mode.value;
@@ -625,7 +628,7 @@
     time = -2; score = streak = bestStreak = hits = perfects = misses = wrong = 0;
     if (window.KeyfallSound) KeyfallSound.bandStop();
     newBand();
-    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear();
+    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear(); songPedal = false; pedalSound();
     state = "idle"; ui.start.textContent = "Start"; ui.results.hidden = true;
     ui.restart.hidden = true; ui.pause.hidden = true;
     const def = SONGS[ui.song.value];
@@ -643,7 +646,7 @@
     state = "paused"; ui.start.textContent = "Resume"; ui.restart.hidden = false; ui.pause.hidden = true;
     if (window.KeyfallSound) KeyfallSound.bandStop();
     ui.ready.hidden = !!drill || !!train || !!rec || !$("home").hidden;
-    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear();
+    autoDown.forEach((_, m) => noteOff(m)); autoDown.clear(); pedalRing.forEach(m => noteOff(m)); pedalRing.clear(); songPedal = false; pedalSound();
   }
   function toggle() { state === "running" ? pause() : start(); }
 
@@ -754,7 +757,10 @@
       if (!isUser(n)) {
         if (!n.played) {
           n.played = true; n.state = "hit";
-          if (!mic.on) noteOn(n.midi, 0.6 * (n.vel ?? 1));                // silent while listening: the microphone would hear it
+          // played like a pianist: the melody sings over the accompaniment, a recording keeps its own loudness,
+          // and no two notes are struck exactly alike (silent while listening: the microphone would hear it)
+          const base = n.amp != null ? 0.32 + 0.6 * n.amp : n.hand === "left" ? 0.5 : 0.66;
+          if (!mic.on) noteOn(n.midi, Math.min(1, base * (n.vel ?? 1) * (0.95 + Math.random() * 0.1)));
           autoDown.set(n.midi, n.start + n.dur * 0.92); pedalRing.delete(n.midi);
         }
       } else if (mode() === "play" && n.state === "pending" && time > n.start + lateBy()) {
@@ -763,6 +769,7 @@
     }
     // a note's key comes up when the note ends; with the pedal down only its sound rings on, until the pedal lifts
     const held = pedalDown(time);
+    if (held !== songPedal) { songPedal = held; pedalSound(); }
     autoDown.forEach((end, m) => { if (time >= end) { autoDown.delete(m); if (held) pedalRing.add(m); else if (!down.has(m)) noteOff(m); } });
     if (!held && pedalRing.size) { pedalRing.forEach(m => { if (!down.has(m) && !autoDown.has(m)) noteOff(m); }); pedalRing.clear(); }
     if (time > song.end + 0.8) finish();
@@ -2651,7 +2658,7 @@
       if (midiIn.pedal && midiSound()) { midiIn.held.add(a); down.delete(a); return; }   // the key is up, the pedal keeps it ringing
       release(a);
     } else if (cmd === 0xb0 && a === 64) {              // sustain pedal
-      midiIn.pedal = b >= 64; recPedal(midiIn.pedal);
+      midiIn.pedal = b >= 64; recPedal(midiIn.pedal); pedalSound();
       if (!midiIn.pedal) { midiIn.held.forEach(m => { if (!down.has(m) && !autoDown.has(m)) noteOff(m); }); midiIn.held.clear(); }
     } else if (cmd === 0xb0 && (a === 123 || a === 120)) {   // all notes off
       [...down].forEach(release); midiIn.held.clear();
