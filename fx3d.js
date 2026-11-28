@@ -4,7 +4,7 @@
 // It only draws while something is moving, so it costs nothing when you aren't playing.
 import * as THREE from "./vendor/three/three.module.min.js";
 
-const MAX = 26000;                                        // sparks, smoke and glitter alive at once
+const MAX = 48000;                                        // sparks, smoke and glitter alive at once
 
 export function createFx(host) {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
@@ -106,7 +106,7 @@ export function createFx(host) {
   function burst(x, y, color, big, keyW = 20) {
     if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
-    const n = big ? 24 : 12;
+    const n = big ? 120 : 60;
     for (let i = 0; i < n; i++) {                            // sparks
       const k = next; next = (next + 1) % MAX;
       const a = (Math.random() - 0.5) * 2.2, up = 220 + Math.random() * (big ? 520 : 360);
@@ -119,9 +119,9 @@ export function createFx(host) {
       born[k] = now; life[k] = 0.45 + Math.random() * (big ? 0.65 : 0.4);
       base[k] = 2.5 + Math.random() * (big ? 4 : 2.5); glitter[k] = 0;
     }
-    sprinkle(wx, wy, c, keyW, big ? 16 : 8, 1.3);
-    smoke(wx, wy, c, keyW * 1.4, big ? 40 : 20, Math.random() * 10, 1.6);
-    if (big) sprinkle(wx, wy, new THREE.Color(1, 1, 1), keyW * 3, 60, 1.8);   // a streak: an extra fountain of white glitter
+    sprinkle(wx, wy, c, keyW, big ? 90 : 45, 1.3);
+    smoke(wx, wy, c, keyW * 1.4, big ? 600 : 300, Math.random() * 10, 1.6);
+    if (big) sprinkle(wx, wy, new THREE.Color(1, 1, 1), keyW * 3, 250, 1.8);   // a streak: an extra fountain of white glitter
     // and a quick glow where the key was struck
     const fl = piece("flash");
     fl.mesh.material.color.copy(c);
@@ -164,13 +164,14 @@ export function createFx(host) {
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
   const tally = new Map();
-  function emit(x, y, color, keyW, dt, rate = 32, key = 0) {
+  function emit(x, y, color, keyW, dt, rate = 700, key = 0) {
     if (lost) return;
     const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
     tally.set(key, want - n);
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color);
     if (n) smoke(wx, wy, c, keyW, n, key * 1.37);
-    if (Math.random() < 3 * dt) sprinkle(wx, wy, c, keyW, 1);
+    const tw = 30 * dt, tn = Math.floor(tw) + (Math.random() < tw % 1 ? 1 : 0);
+    if (tn) sprinkle(wx, wy, c, keyW, tn);
     kick();
   }
 

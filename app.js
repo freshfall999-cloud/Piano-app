@@ -664,7 +664,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=8").then(m => {
+    fxLoading = import("./fx3d.js?v=9").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio());
@@ -682,7 +682,7 @@
       particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.6, y: kbTop - 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
         life: 450 + Math.random() * 450, t: now, r: 1.5 + Math.random() * (big ? 3 : 2.2), c: Math.random() < 0.35 ? "#ffffff" : color });
     }
-    if (particles.length > 400) particles.splice(0, particles.length - 400);
+    if (particles.length > 2500) particles.splice(0, particles.length - 2500);
   }
   function bump(el) { el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump"); }
   function registerHit(n, perfect) {
@@ -2509,10 +2509,11 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
-      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 32, m); } catch (e) {} continue; }
-      if (Math.random() < 14 * dt) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
-        vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.8 + Math.random() * 1.6, c: Math.random() < 0.45 ? "#ffffff" : c });
+      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 700, m); } catch (e) {} continue; }
+      for (let q = Math.floor(90 * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
+        vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.6 + Math.random() * 1.2, c: Math.random() < 0.45 ? "#ffffff" : c });
     }
+    if (particles.length > 2500) particles.splice(0, particles.length - 2500);
   }
   const perf = { n: 0, sum: 0 };
   function frame(now) {
