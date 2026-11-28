@@ -54,7 +54,7 @@ export function createFx(host) {
         float d = length(gl_PointCoord - 0.5) * 2.0;
         if (d > 1.0) discard;
         float core = 1.0 - smoothstep(0.55, 1.0, d);            // a crisp, tiny dot (no soft halo)
-        gl_FragColor = vec4(mix(vC, vec3(1.0), 0.35) * 1.4, vA * core);
+        gl_FragColor = vec4(mix(vC, vec3(1.0), 0.45) * 1.6, vA * core);
       }`,
     ...glow,
   });
@@ -107,7 +107,7 @@ export function createFx(host) {
     if (lost || renderer.getContext().isContextLost()) throw new Error("3D drawing was lost");
     const [wx, wy] = toWorld(x, y), c = new THREE.Color(color), now = performance.now() / 1000;
     // only tiny lights: a puff of them (no big sparks, no glowing blobs)
-    smoke(wx, wy, c, keyW * 1.3, big ? 500 : 250, Math.random() * 10, 1.6);
+    smoke(wx, wy, c, keyW * 1.3, big ? 120 : 50, Math.random() * 10, 1.4);
     kick();
   }
 
@@ -131,20 +131,21 @@ export function createFx(host) {
     const now = performance.now() / 1000;
     for (let i = 0; i < n; i++) {
       const k = next; next = (next + 1) % MAX;
-      pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.75; pos[k * 3 + 1] = wy + Math.random() * 5; pos[k * 3 + 2] = Math.random() * 14;
-      vel[k * 3] = (Math.random() - 0.5) * 14 * speed;
-      vel[k * 3 + 1] = (22 + Math.random() * 55) * speed;
-      vel[k * 3 + 2] = Math.random() * 10;
-      const pale = Math.random() < 0.62, b = 0.8 + Math.random() * 0.2;
+      // from a narrow spot on the key, at different speeds: they string out into a thin trail that rises high
+      pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.35; pos[k * 3 + 1] = wy + Math.random() * 4; pos[k * 3 + 2] = Math.random() * 8;
+      vel[k * 3] = (Math.random() - 0.5) * 8 * speed;
+      vel[k * 3 + 1] = (45 + Math.random() * 115) * speed;
+      vel[k * 3 + 2] = Math.random() * 6;
+      const pale = Math.random() < 0.75, b = 0.85 + Math.random() * 0.15;
       if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
       else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
-      born[k] = now; life[k] = 2.2 + Math.random() * 2.2;
-      base[k] = 0.9 + Math.random() * 0.8; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
+      born[k] = now; life[k] = 2.4 + Math.random() * 2.2;
+      base[k] = 1.4 + Math.random() * 1.4; glitter[k] = 2; seed[k] = sd + Math.random() * 0.15;
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
   const tally = new Map();
-  function emit(x, y, color, keyW, dt, rate = 300, key = 0) {
+  function emit(x, y, color, keyW, dt, rate = 140, key = 0) {
     if (lost) return;
     const want = rate * dt + (tally.get(key) || 0), n = Math.floor(want);
     tally.set(key, want - n);
@@ -167,9 +168,9 @@ export function createFx(host) {
       alive++;
       if (glitter[k] === 2) {                              // smoke: follows a slowly turning swirl as it rises
         const y = pos[k * 3 + 1], sd = seed[k];
-        const want = Math.sin(y * 0.011 + sd * 3.1 + now * 0.6) * 38 + Math.sin(y * 0.027 - now * 1.1 + sd * 5.3) * 16;
-        vel[k * 3] += (want - vel[k * 3]) * Math.min(1, dt * 2.2);
-        vel[k * 3 + 1] = Math.min(150, vel[k * 3 + 1] + 24 * dt); vel[k * 3 + 2] *= float;
+        const want = Math.sin(y * 0.009 + sd * 3.1 + now * 0.5) * 70 + Math.sin(y * 0.023 - now * 0.9 + sd * 5.3) * 28;
+        vel[k * 3] += (want - vel[k * 3]) * Math.min(1, dt * 2.6);
+        vel[k * 3 + 1] = Math.min(190, vel[k * 3 + 1] + 14 * dt); vel[k * 3 + 2] *= float;
       } else if (glitter[k]) {                             // glitter: rises gently and swirls
         vel[k * 3] = vel[k * 3] * float + Math.sin(now * 2.1 + k * 1.7 + pos[k * 3 + 1] * 0.015) * 160 * dt;
         vel[k * 3 + 1] = vel[k * 3 + 1] * float + 40 * dt; vel[k * 3 + 2] *= float;
@@ -178,8 +179,9 @@ export function createFx(host) {
       }
       pos[k * 3] += vel[k * 3] * dt; pos[k * 3 + 1] += vel[k * 3 + 1] * dt; pos[k * 3 + 2] += vel[k * 3 + 2] * dt;
       if (glitter[k] === 2) {
-        alpha[k] = Math.pow(1 - age, 1.6) * Math.min(1, age * 14) * (0.75 + 0.25 * Math.sin(now * (6 + (k % 5)) + k));
-        size[k] = base[k] * (1 - age * 0.3);
+        // bright, crisp points that sparkle (each twinkles at its own pace) and fade near the end
+        alpha[k] = Math.min(1, (1 - age) * 2.2) * Math.min(1, age * 14) * (0.55 + 0.45 * Math.sin(now * (5 + (k % 7)) + k * 2.3));
+        size[k] = base[k] * (1 - age * 0.25);
         continue;
       }
       alpha[k] = Math.pow(1 - age, 1.3) * Math.min(1, age * 12);
