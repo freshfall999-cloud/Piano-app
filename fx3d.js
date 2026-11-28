@@ -45,7 +45,7 @@ export function createFx(host) {
       void main() {
         vA = alpha; vC = color;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = max(1.0, size * scale / -mv.z);
+        gl_PointSize = max(1.5, size * scale / -mv.z);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
@@ -143,7 +143,7 @@ export function createFx(host) {
       const white = Math.random() < 0.45, f = 0.75 + Math.random() * 0.25;
       col[k * 3] = white ? 1 : c.r * f; col[k * 3 + 1] = white ? 0.92 : c.g * f; col[k * 3 + 2] = white ? 0.94 : c.b * f;
       born[k] = now; life[k] = 0.9 + Math.random() * 1.3;
-      base[k] = 1.6 + Math.random() * 1.8; glitter[k] = 1;
+      base[k] = 2.4 + Math.random() * 2.4; glitter[k] = 1;
     }
   }
   // smoke: a fine stream of tiny lights that rises slowly and curls (all the smoke of one key follows one swirl)
@@ -159,7 +159,7 @@ export function createFx(host) {
       if (pale) { col[k * 3] = b; col[k * 3 + 1] = 0.84 * b; col[k * 3 + 2] = 0.88 * b; }
       else { col[k * 3] = c.r * b; col[k * 3 + 1] = c.g * b; col[k * 3 + 2] = c.b * b; }
       born[k] = now; life[k] = 2.2 + Math.random() * 2.2;
-      base[k] = 0.9 + Math.random() * 0.9; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
+      base[k] = 1.5 + Math.random() * 1.4; glitter[k] = 2; seed[k] = sd + Math.random() * 0.5;
     }
   }
   // a key that is sounding (held, or played by the app): a steady stream of smoke and a little glitter (per second)
