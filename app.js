@@ -1515,6 +1515,7 @@
     classic:  { right: "#39b6ff", left: "#ffa23a", particle: "#cfeaff", motion: "trails",   amount: 0.7, size: 1,   bloom: "off",    rays: false, classic: true },
   };
   let red = true, FX = { preset: "trails", ...PRESETS.trails };
+  const mixHex = (a, b, t) => { const A = hexRgb(a), B = hexRgb(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",")})`; };
   const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
   const rgba = (h, a) => { const [r, g, b] = hexRgb(h); return `rgba(${r},${g},${b},${a})`; };
   const tint = (h, m, a = 1) => { const [r, g, b] = hexRgb(h).map(v => Math.round(v + (255 - v) * m)); return `rgba(${r},${g},${b},${a})`; };   // toward white
@@ -2455,53 +2456,25 @@
       if (d !== want) { d += (want - d) * Math.min(1, drawDt / 0.03); if (Math.abs(want - d) < 0.03) d = want; keyDepth.set(k.midi, d); }
       const hint = k.midi === badKey || flash ? (red ? "#b0b4c8" : "#ff6b7d") : target.has(k.midi) ? (pass ? "#2e9d5f" : "#8fe9b0")
         : learned ? (pass ? "#34507a" : "#cfe2fb") : null;
-      const kx = k.x + (pass ? 0 : 0.6), kw = k.w - (pass ? 0 : 1.2);
+      // a flat keyboard: plain white and black keys; a played key just gets a little darker
+      const kx = k.x + (pass ? 0 : 0.5), kw = k.w - (pass ? 0 : 1);
       if (!pass) {
-        const top = kbTop - 2 + d * 3, bottom = kbTop + k.h - 2 + d * 2, lip = 7 * (1 - d);   // the front edge shows until the key is down
         if (hint && target.has(k.midi)) { ctx.shadowColor = hint; ctx.shadowBlur = 14; }
-        ctx.fillStyle = hint ? keyFill(hint, k) : grad.white;
-        rrect(kx, top, kw, bottom - top, 4); ctx.fill();
+        ctx.fillStyle = hint || (d > 0 ? mixHex("#f4f4f4", "#c9c9c9", d) : "#f4f4f4");
+        rrect(kx, kbTop - 2, kw, k.h, 3); ctx.fill();
         ctx.shadowBlur = 0;
-        if (lip > 0.5) {
-          ctx.fillStyle = grad.lip; rrect(kx, bottom - lip, kw, lip, 3); ctx.fill();
-          ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.fillRect(kx + 1, bottom - lip, kw - 2, 1);        // the edge catching the light
-        }
-        if (!hint) {                                     // a sheen on the left edge, a soft shadow on the right
-          ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.fillRect(kx, top + 4, 1, bottom - top - lip - 5);
-          ctx.fillStyle = "rgba(0,0,0,.07)"; ctx.fillRect(kx + kw - 1.5, top + 4, 1.5, bottom - top - lip - 5);
-        }
-        if (d > 0) {                                     // down between its neighbours: in their shadow at the top and sides
-          const sh = ctx.createLinearGradient(0, top, 0, top + k.h * 0.45);
-          sh.addColorStop(0, `rgba(0,0,0,${0.42 * d})`); sh.addColorStop(1, "rgba(0,0,0,0)");
-          ctx.fillStyle = sh; ctx.fillRect(kx, top, kw, k.h * 0.45);
-          ctx.fillStyle = `rgba(0,0,0,${0.22 * d})`; ctx.fillRect(kx, top, 2, bottom - top); ctx.fillRect(kx + kw - 2, top, 2, bottom - top);
-        }
       } else {
-        const bh = k.h + d * 2, face = bh * (0.12 - 0.08 * d), y0 = kbTop - 2 + d * 2;        // the sloped front shrinks as it goes down
-        ctx.save();                                      // a soft shadow cast on the white keys below
-        ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4 - d * 2; ctx.shadowOffsetX = 1;
-        ctx.fillStyle = "#000"; rrect(kx, y0, kw, bh, 3); ctx.fill(); ctx.restore();
-        ctx.fillStyle = hint ? keyFill(hint, k) : grad.black;
-        rrect(kx, y0, kw, bh, 3); ctx.fill();
-        if (!hint) {
-          ctx.fillStyle = "rgba(255,255,255,.07)"; ctx.fillRect(kx + 1, y0 + 2, Math.max(1, kw * 0.12), bh - face - 3);    // bevels
-          ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(kx + kw - Math.max(1, kw * 0.12) - 1, y0 + 2, Math.max(1, kw * 0.12), bh - face - 3);
-          ctx.globalAlpha = 1 - 0.6 * d; ctx.fillStyle = grad.gloss;                                             // lacquer
-          rrect(kx + kw * 0.2, y0 + 3, kw * 0.6, bh - face - 5, 2); ctx.fill(); ctx.globalAlpha = 1;
-          ctx.fillStyle = grad.face; ctx.fillRect(kx + 0.5, y0 + bh - face, kw - 1, face);
-          ctx.fillStyle = "rgba(255,255,255,.22)"; ctx.fillRect(kx + 1, y0 + bh - face, kw - 2, 1);
-        }
-        if (d > 0) { ctx.fillStyle = `rgba(0,0,0,${0.3 * d})`; rrect(kx, y0, kw, bh, 3); ctx.fill(); }
+        ctx.fillStyle = hint || (d > 0 ? mixHex("#141416", "#3a3a40", d) : "#141416");
+        rrect(kx, kbTop - 2, kw, k.h, 2); ctx.fill();
       }
       if (lab === "off") continue;
       const text = lab === "keys" ? KEYLABEL[k.midi] : (pass ? "" : NAMES[k.midi % 12] + (k.midi % 12 === 0 ? Math.floor(k.midi / 12) - 1 : ""));
       if (!text || k.w < 11) continue;
       ctx.font = `${Math.max(9, Math.min(13, k.w * 0.55))}px system-ui, sans-serif`;
       ctx.fillStyle = pass ? "#8d8f9a" : "#8a8781";
-      ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10 + (keyDepth.get(k.midi) || 0) * 2);
+      ctx.fillText(text, k.x + k.w / 2, kbTop + k.h - 10);
     }
-    ctx.fillStyle = grad.felt; ctx.fillRect(0, kbTop - 1, W, 4);   // the felt at the back of the keys
-    ctx.fillStyle = grad.shade; ctx.fillRect(0, kbTop + 3, W, 14);  // shadow under the rail
+
     // the hit line: a glowing rail the notes land on
     const rail = red ? COLORS.right : "#7fd4ff";
     if (red) glowList.push(["rail", rail]);
