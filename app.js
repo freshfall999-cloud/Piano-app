@@ -664,7 +664,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=10").then(m => {
+    fxLoading = import("./fx3d.js?v=11").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio());
@@ -676,11 +676,11 @@
     beams.push({ x, w: k.w, color, t: now });
     if (reduceMotion) return;
     if (fx) { try { fx.burst(x, kbTop, color, big, k.w); return; } catch (e) { console.warn("3D effects off:", e); try { fx.dispose(); } catch (e2) {} fx = null; setTimeout(() => setFx(ui.fx3d.checked), 3000); } }
-    const n = big ? 34 : 18;
+    const n = big ? 160 : 80;
     for (let i = 0; i < n; i++) {
       const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.9, v = 120 + Math.random() * (big ? 320 : 220);
       particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.6, y: kbTop - 2, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
-        life: 450 + Math.random() * 450, t: now, r: 1.5 + Math.random() * (big ? 3 : 2.2), c: Math.random() < 0.35 ? "#ffffff" : color });
+        life: 450 + Math.random() * 450, t: now, r: 0.5 + Math.random() * 0.7, c: Math.random() < 0.35 ? "#ffffff" : color });
     }
     if (particles.length > 2500) particles.splice(0, particles.length - 2500);
   }
@@ -2440,10 +2440,8 @@
       const t = (now - pt.t) / 1000;
       const px = pt.x + pt.vx * t + (pt.g < 0 ? Math.sin(t * 2.5 + pt.y) * 14 : 0), py = pt.y + pt.vy * t + (pt.g ?? 260) * t * t, r = pt.r * (1 - a * 0.4);
       ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = (1 - a) * 0.35; ctx.fillStyle = pt.c;                 // soft halo
-      ctx.beginPath(); ctx.arc(px, py, r * 3, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 1 - a;                                                  // bright core
-      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1 - a; ctx.fillStyle = pt.c;                            // a tiny, crisp dot
+      ctx.fillRect(px - r, py - r, r * 2, r * 2);
     }
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
@@ -2509,9 +2507,9 @@
     for (const m of sounding()) {
       if (m < LOW || m > HIGH) continue;
       const k = keyOf(m), x = k.x + k.w / 2, c = COLORS[m < 60 ? "left" : "right"];
-      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 700, m); } catch (e) {} continue; }
+      if (fx) { try { fx.emit(x, kbTop - 3, c, k.w, dt, 300, m); } catch (e) {} continue; }
       for (let q = Math.floor(90 * dt + Math.random()); q > 0; q--) particles.push({ x: x + (Math.random() - 0.5) * k.w * 0.8, y: kbTop - 4, vx: (Math.random() - 0.5) * 30,
-        vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.9 + Math.random() * 1.6, c: Math.random() < 0.45 ? "#ffffff" : c });
+        vy: -(40 + Math.random() * 90), g: -8, life: 900 + Math.random() * 900, t: performance.now(), r: 0.5 + Math.random() * 0.6, c: Math.random() < 0.45 ? "#ffffff" : c });
     }
     if (particles.length > 2500) particles.splice(0, particles.length - 2500);
   }
