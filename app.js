@@ -1540,7 +1540,7 @@
   const shade = (h, m) => { const [r, g, b] = hexRgb(h).map(v => Math.round(v * m)); return `rgb(${r},${g},${b})`; };                       // toward black
   function applyFx(save = true) {
     red = !FX.classic; COLORS.right = FX.right; COLORS.left = FX.left; grad = null;
-    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount * perf.thin, size: FX.size });
+    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount, size: FX.size });
     $("fxPreset").value = FX.preset; $("fxRight").value = FX.right; $("fxLeft").value = FX.left; $("fxParticle").value = FX.particle;
     $("fxMotion").value = FX.motion; $("fxAmount").value = FX.amount; $("fxSize").value = FX.size; $("fxBloom").value = FX.bloom; $("fxRays").checked = !!FX.rays;
     $("fxAmountVal").textContent = Math.round(FX.amount * 100) + "%"; $("fxSizeVal").textContent = Math.round(FX.size * 100) + "%";
@@ -2415,7 +2415,7 @@
   $("printBtn").onclick = () => { if (song) openPrintView(); };
   window.__keyfallPrint = { printPages, pdfFromPages };              // (for automated tests)
 
-  const perf = { n: 0, sum: 0, noBloom: false, thin: 1 };
+  const perf = { n: 0, sum: 0, sq: 0, noBloom: false, last: null, off: false };
   const keyDepth = new Map();                        // how far down each key is (0 up … 1 down), eased
   let lastDraw = 0, drawDt = 0, ambient = 0;
   function draw() {
@@ -2714,25 +2714,32 @@
   function frame(now) {
     micTick();
     const dt = Math.min((now - last) / 1000, 0.1);
-    // Keeping it smooth: if a song runs under about 50 pictures a second, the app eases off by itself, one step
-    // every two seconds: sharpness down a level (remembered), then the glow off, then fewer particles.
-    if (state === "running" && !document.hidden) {
-      perf.n++; perf.sum += dt;
+    // Keeping it smooth (if that setting is on): when a song really runs slowly, the sharpness goes down a level,
+    // then the glow pauses. Each step is checked two seconds later: if it didn't make things faster it is undone
+    // and the app stops adjusting, because then the device is limiting the speed itself (Low Power Mode shows 30
+    // pictures a second whatever is drawn). The particles are never thinned out.
+    if (state === "running" && !document.hidden && $("autoQ").checked && !perf.off) {
+      perf.n++; perf.sum += dt; perf.sq += dt * dt;
       if (perf.sum >= 2) {
-        if (perf.sum / perf.n > 1 / 50) {
+        const avg = perf.sum / perf.n, sd = Math.sqrt(Math.max(0, perf.sq / perf.n - avg * avg));
+        const capped = sd < 0.004 && Math.abs(avg - 1 / 30) < 0.003;       // a steady 30 a second: a limit, not slowness
+        if (perf.last) {
+          if (avg > perf.last.avg * 0.9) { perf.last.undo(); perf.off = true; $("sharpNote").textContent = ""; }
+          else perf.last.keep();
+          perf.last = null;
+        } else if (avg > 1 / 50 && !capped) {
           if (ui.sharp.value !== "standard") {
-            const was = ui.sharp.options[ui.sharp.selectedIndex].text.split(":")[0];
-            ui.sharp.value = ui.sharp.value === "max" ? "ultra" : "standard";
-            try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {}
-            $("sharpNote").textContent = `(stepped down from ${was} to keep it smooth)`; layout();
+            const was = ui.sharp.value, name = ui.sharp.options[ui.sharp.selectedIndex].text.split(":")[0];
+            ui.sharp.value = was === "max" ? "ultra" : "standard"; layout();
+            $("sharpNote").textContent = `(stepped down from ${name} to keep it smooth)`;
+            const now2 = ui.sharp.value;
+            perf.last = { avg, undo: () => { ui.sharp.value = was; layout(); }, keep: () => { try { localStorage.setItem("keyfall:sharp", now2); } catch (e) {} } };
           } else if (!perf.noBloom && red && FX.bloom !== "off") {
             perf.noBloom = true; bloomSetup(); $("sharpNote").textContent = "(the glow is paused to keep it smooth)";
-          } else if (perf.thin > 0.3) {
-            perf.thin *= 0.7; if (fx && fx.setStyle) fx.setStyle({ amount: FX.amount * perf.thin });
-            $("sharpNote").textContent = "(fewer particles to keep it smooth)";
+            perf.last = { avg, undo: () => { perf.noBloom = false; bloomSetup(); }, keep: () => {} };
           }
         }
-        perf.n = 0; perf.sum = 0;
+        perf.n = 0; perf.sum = 0; perf.sq = 0;
       }
     }
     step(dt); last = now;
@@ -3453,7 +3460,7 @@
   $("fxLeft").oninput = () => custom("left", $("fxLeft").value);
   $("fxParticle").oninput = () => custom("particle", $("fxParticle").value);
   $("fxMotion").onchange = () => custom("motion", $("fxMotion").value);
-  $("fxAmount").oninput = () => { perf.thin = 1; custom("amount", +$("fxAmount").value); };
+  $("fxAmount").oninput = () => custom("amount", +$("fxAmount").value);
   $("fxSize").oninput = () => custom("size", +$("fxSize").value);
   $("fxBloom").onchange = () => { perf.noBloom = false; custom("bloom", $("fxBloom").value); };
   $("fxRays").onchange = () => custom("rays", $("fxRays").checked);
@@ -3468,8 +3475,18 @@
   $("kbBlack").oninput = () => kbCustom("kbBlack", $("kbBlack").value);
   $("kbPressed").oninput = () => kbCustom("kbPressed", $("kbPressed").value);
   $("kbLit").onchange = () => kbCustom("kbLit", $("kbLit").value);
-  try { const v = localStorage.getItem("keyfall:sharp"); if (v && v !== ui.sharp.value) { ui.sharp.value = v; layout(); } } catch (e) {}
-  ui.sharp.onchange = () => { perf.n = perf.sum = 0; $("sharpNote").textContent = ""; try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {} layout(); };
+  try {
+    // (an earlier version lowered the sharpness by itself, sometimes wrongly, and remembered it: start again from Maximum once)
+    if (!localStorage.getItem("keyfall:sharpReset1")) { localStorage.removeItem("keyfall:sharp"); localStorage.setItem("keyfall:sharpReset1", "1"); }
+    const v = localStorage.getItem("keyfall:sharp"); if (v && v !== ui.sharp.value) { ui.sharp.value = v; layout(); }
+    if (localStorage.getItem("keyfall:autoQ") === "0") $("autoQ").checked = false;
+  } catch (e) {}
+  $("autoQ").onchange = () => {
+    try { localStorage.setItem("keyfall:autoQ", $("autoQ").checked ? "1" : "0"); } catch (e) {}
+    perf.n = perf.sum = perf.sq = 0; perf.last = null; perf.off = false;
+    if (!$("autoQ").checked && perf.noBloom) { perf.noBloom = false; bloomSetup(); $("sharpNote").textContent = ""; }
+  };
+  ui.sharp.onchange = () => { perf.n = perf.sum = perf.sq = 0; perf.last = null; perf.off = false; $("sharpNote").textContent = ""; try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {} layout(); };
   ui.fx3d.onchange = () => { try { localStorage.setItem("keyfall:fx3d", ui.fx3d.checked ? "1" : "0"); } catch (e) {} setFx(ui.fx3d.checked); };
   setTimeout(() => setFx(ui.fx3d.checked), 1200);
   ui.pause.onclick = toggle;
