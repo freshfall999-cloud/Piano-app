@@ -7,8 +7,7 @@ import * as THREE from "./vendor/three/three.module.min.js";
 const MAX = 48000;                                        // sparks, smoke and glitter alive at once
 
 export function createFx(host) {
-  // (the drawing is kept after each frame, so the bloom layer can copy it)
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power", preserveDrawingBuffer: true });
+  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "high-performance" });
   const canvas = renderer.domElement;
   canvas.className = "fx3d";
   canvas.setAttribute("aria-hidden", "true");
@@ -62,7 +61,7 @@ export function createFx(host) {
   const sparks = new THREE.Points(geo, sparkMat);
   sparks.frustumCulled = false;
   scene.add(sparks);
-  let next = 0;
+  let next = 0, madeAt = 0, sentAt = 0;
 
   // ---- a soft glow texture (for the flash and the ripple rings) ----
   const glowTex = (() => {
@@ -92,7 +91,7 @@ export function createFx(host) {
 
   function resize(w, h, pr) {
     W = Math.max(1, w); H = Math.max(1, h);
-    if (pr) ratio = Math.min(pr, 3);
+    if (pr) ratio = Math.min(pr, 2);                       // (tiny dots gain nothing from more, and it costs speed)
     renderer.setPixelRatio(ratio);
     renderer.setSize(W, H, false);
     camera.aspect = W / H;
@@ -120,7 +119,7 @@ export function createFx(host) {
   function sprinkle(wx, wy, c, keyW, n, speed = 1) {
     const now = performance.now() / 1000;
     for (let i = 0; i < n; i++) {
-      const k = next; next = (next + 1) % MAX;
+      const k = next; next = (next + 1) % MAX; madeAt++;
       pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.9; pos[k * 3 + 1] = wy + Math.random() * 6; pos[k * 3 + 2] = Math.random() * 40;
       vel[k * 3] = (Math.random() - 0.5) * 60 * speed;
       vel[k * 3 + 1] = (50 + Math.random() * 190) * speed;
@@ -143,7 +142,7 @@ export function createFx(host) {
   function spawn(kind, wx, wy, keyW, n) {
     const now = performance.now() / 1000;
     for (let i = 0; i < n; i++) {
-      const k = next; next = (next + 1) % MAX;
+      const k = next; next = (next + 1) % MAX; madeAt++;
       pos[k * 3 + 2] = Math.random() * 8; vel[k * 3 + 2] = Math.random() * 6; paint(k); born[k] = now; glitter[k] = kind;
       if (kind === 3) {                                    // fountain
         pos[k * 3] = wx + (Math.random() - 0.5) * keyW * 0.5; pos[k * 3 + 1] = wy;
@@ -169,7 +168,7 @@ export function createFx(host) {
   function smoke(wx, wy, c, keyW, n, sd, speed = 1) {
     const now = performance.now() / 1000;
     for (let i = 0; i < n; i++) {
-      const k = next; next = (next + 1) % MAX;
+      const k = next; next = (next + 1) % MAX; madeAt++;
       // from a narrow spot on the key they shoot up, slow down and hang in the air, drifting together in curling
       // strands (as in piano videos); a few stray from the strand
       const stray = Math.random() < 0.12;
@@ -209,7 +208,7 @@ export function createFx(host) {
     let alive = 0;
     const drag = Math.pow(0.35, dt), float = Math.pow(0.75, dt);
     for (let k = 0; k < MAX; k++) {
-      if (!life[k]) { alpha[k] = 0; size[k] = 0; continue; }
+      if (!life[k]) continue;
       const age = (now - born[k]) / life[k];
       if (age >= 1) { life[k] = 0; alpha[k] = 0; size[k] = 0; continue; }
       alive++;
@@ -255,8 +254,11 @@ export function createFx(host) {
       if (p.kind === "ring") { const r = p.r * (0.25 + e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a) * 0.5; }
       else { const r = p.r * (0.6 + 0.6 * e); p.mesh.scale.set(r, r, r); p.mesh.material.opacity = (1 - a) * (1 - a); }
     }
-    for (const n of ["position", "color", "alpha", "size"]) geo.attributes[n].needsUpdate = true;
+    // only what changed goes to the graphics chip: colours only when new particles were made
+    for (const n of ["position", "alpha", "size"]) geo.attributes[n].needsUpdate = true;
+    if (madeAt !== sentAt) { geo.attributes.color.needsUpdate = true; sentAt = madeAt; }
     renderer.render(scene, camera);
+    if (api.onRender) api.onRender(canvas);                // (the app copies the picture for its glow, right after it is drawn)
     if (alive) raf = requestAnimationFrame(frame);
   }
 
@@ -267,5 +269,6 @@ export function createFx(host) {
     renderer.dispose(); renderer.forceContextLoss(); canvas.remove();   // (hand the graphics memory back right away)
   }
 
-  return { burst, emit, resize, dispose, setStyle, canvas };
+  const api = { burst, emit, resize, dispose, setStyle, canvas, onRender: null };
+  return api;
 }

@@ -664,7 +664,7 @@
   function setFx(on) {
     if (!on || reduceMotion) { if (fx) { fx.dispose(); fx = null; } return; }
     if (fx || fxLoading) return;
-    fxLoading = import("./fx3d.js?v=15").then(m => {
+    fxLoading = import("./fx3d.js?v=16").then(m => {
       fxLoading = null;
       if (!ui.fx3d.checked) return;
       fx = m.createFx(canvas); fx.resize(W, H, pixelRatio()); applyFx(false);
@@ -1534,7 +1534,7 @@
   const shade = (h, m) => { const [r, g, b] = hexRgb(h).map(v => Math.round(v * m)); return `rgb(${r},${g},${b})`; };                       // toward black
   function applyFx(save = true) {
     red = !FX.classic; COLORS.right = FX.right; COLORS.left = FX.left; grad = null;
-    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount, size: FX.size });
+    if (fx && fx.setStyle) fx.setStyle({ motion: FX.motion, color: FX.particle, amount: FX.amount * perf.thin, size: FX.size });
     $("fxPreset").value = FX.preset; $("fxRight").value = FX.right; $("fxLeft").value = FX.left; $("fxParticle").value = FX.particle;
     $("fxMotion").value = FX.motion; $("fxAmount").value = FX.amount; $("fxSize").value = FX.size; $("fxBloom").value = FX.bloom; $("fxRays").checked = !!FX.rays;
     $("fxAmountVal").textContent = Math.round(FX.amount * 100) + "%"; $("fxSizeVal").textContent = Math.round(FX.size * 100) + "%";
@@ -1549,8 +1549,18 @@
   // blurs and adds as light: they glow softly into the dark.
   let bloomCv = null, bctx = null;
   const BS = 0.25;                                     // the glow layer's size (a quarter: it is blurred anyway)
+  let pglow = null;                                    // a small copy of the particles, for the glow
+  function grabParticles(cv) {
+    if (!bloomCv || bloomCv.hidden) return;
+    if (!pglow) pglow = document.createElement("canvas");
+    if (pglow.width !== bloomCv.width || pglow.height !== bloomCv.height) { pglow.width = bloomCv.width; pglow.height = bloomCv.height; }
+    const g = pglow.getContext("2d");
+    g.clearRect(0, 0, pglow.width, pglow.height);
+    try { g.drawImage(cv, 0, 0, pglow.width, pglow.height); } catch (e) {}
+  }
   function bloomSetup() {
-    const on = red && FX.bloom !== "off";
+    if (fx) fx.onRender = grabParticles;
+    const on = red && FX.bloom !== "off" && !perf.noBloom;
     if (!on) { if (bloomCv) bloomCv.hidden = true; return; }
     if (!bloomCv) { bloomCv = document.createElement("canvas"); bloomCv.className = "bloom"; bloomCv.setAttribute("aria-hidden", "true"); canvas.after(bloomCv); bctx = bloomCv.getContext("2d"); }
     if (fx && fx.canvas && fx.canvas.nextSibling !== bloomCv) fx.canvas.after(bloomCv);
@@ -1574,7 +1584,7 @@
     }
     glowList.length = 0;
     b.globalAlpha = 1;
-    if (fx && fx.canvas) { b.setTransform(1, 0, 0, 1, 0, 0); try { b.drawImage(fx.canvas, 0, 0, bloomCv.width, bloomCv.height); } catch (e) {} }   // the particles glow too
+    if (fx && pglow) { b.setTransform(1, 0, 0, 1, 0, 0); try { b.drawImage(pglow, 0, 0); } catch (e) {} }   // the particles glow too
     b.globalCompositeOperation = "source-over";
   }
   // Wisps: thin streaks of light that rise quickly from a playing key and curl away (in the particles' colour)
@@ -2399,6 +2409,7 @@
   $("printBtn").onclick = () => { if (song) openPrintView(); };
   window.__keyfallPrint = { printPages, pdfFromPages };              // (for automated tests)
 
+  const perf = { n: 0, sum: 0, noBloom: false, thin: 1 };
   const keyDepth = new Map();                        // how far down each key is (0 up … 1 down), eased
   let lastDraw = 0, drawDt = 0, ambient = 0;
   function draw() {
@@ -2450,10 +2461,11 @@
         if (red) {                                       // a glowing bar of red light: soft halo, bright core
           const a0 = ctx.globalAlpha, c = n.state === "miss" ? "#7a2a36" : base, top = Math.max(-20, yb - h);
           ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = c;
-          ctx.globalAlpha = a0 * 0.09; rrect(x0 - 8, top - 8, w0 + 16, yb - top + 16, 12); ctx.fill();
-          ctx.globalAlpha = a0 * 0.2; rrect(x0 - 3.5, top - 3.5, w0 + 7, yb - top + 7, 9); ctx.fill();
+          // (a note about to be played glows brighter: wider, stronger halo layers instead of a slow blurred shadow)
+          if (near) { ctx.globalAlpha = a0 * 0.1; rrect(x0 - 14, top - 14, w0 + 28, yb - top + 28, 18); ctx.fill(); }
+          ctx.globalAlpha = a0 * (near ? 0.2 : 0.09); rrect(x0 - 8, top - 8, w0 + 16, yb - top + 16, 12); ctx.fill();
+          ctx.globalAlpha = a0 * (near ? 0.36 : 0.2); rrect(x0 - 3.5, top - 3.5, w0 + 7, yb - top + 7, 9); ctx.fill();
           ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = a0;
-          if (near) { ctx.shadowColor = c; ctx.shadowBlur = 24; }
           const gr = ctx.createLinearGradient(x0, 0, x0 + w0, 0);
           gr.addColorStop(0, c); gr.addColorStop(0.5, n.state === "miss" ? c : tint(c, 0.25)); gr.addColorStop(1, c);
           ctx.fillStyle = gr; rrect(x0, yb - h, w0, h, Math.min(6, w0 / 2)); ctx.fill();
@@ -2593,9 +2605,11 @@
     // the hit line: a glowing rail the notes land on
     const rail = red ? COLORS.right : "#7fd4ff";
     if (red) glowList.push(["rail", rail]);
-    ctx.shadowColor = rail; ctx.shadowBlur = 12;
+    // (its glow is a soft gradient strip: a blurred shadow across the whole screen every frame is slow on an iPad)
+    const rg = ctx.createLinearGradient(0, kbTop - 14, 0, kbTop + 10);
+    rg.addColorStop(0, rgba(rail, 0)); rg.addColorStop(0.5, rgba(rail, 0.45)); rg.addColorStop(1, rgba(rail, 0));
+    ctx.fillStyle = rg; ctx.fillRect(0, kbTop - 14, W, 24);
     ctx.fillStyle = rail; ctx.fillRect(0, kbTop - 3, W, 2);
-    ctx.shadowBlur = 0;
     if (red) { ctx.fillStyle = tint(rail, 0.75, 0.55); ctx.fillRect(0, kbTop - 2.5, W, 1); }
     // where a playing key meets the notes: only a thin line of light along the rail (no glowing ball)
     ctx.globalCompositeOperation = "lighter";
@@ -2689,17 +2703,26 @@
     }
     if (particles.length > 5000) particles.splice(0, particles.length - 5000);
   }
-  const perf = { n: 0, sum: 0 };
   function frame(now) {
     micTick();
     const dt = Math.min((now - last) / 1000, 0.1);
-    if (state === "running" && !document.hidden && ui.sharp.value !== "standard") {   // too slow: one step down
+    // Keeping it smooth: if a song runs under about 50 pictures a second, the app eases off by itself, one step
+    // every two seconds: sharpness down a level (remembered), then the glow off, then fewer particles.
+    if (state === "running" && !document.hidden) {
       perf.n++; perf.sum += dt;
-      if (perf.n >= 120) {
-        if (perf.sum / perf.n > 1 / 40) {
-          const was = ui.sharp.options[ui.sharp.selectedIndex].text.split(":")[0];
-          ui.sharp.value = ui.sharp.value === "max" ? "ultra" : "standard";
-          $("sharpNote").textContent = `(stepped down from ${was}: this device couldn't keep up)`; layout();
+      if (perf.sum >= 2) {
+        if (perf.sum / perf.n > 1 / 50) {
+          if (ui.sharp.value !== "standard") {
+            const was = ui.sharp.options[ui.sharp.selectedIndex].text.split(":")[0];
+            ui.sharp.value = ui.sharp.value === "max" ? "ultra" : "standard";
+            try { localStorage.setItem("keyfall:sharp", ui.sharp.value); } catch (e) {}
+            $("sharpNote").textContent = `(stepped down from ${was} to keep it smooth)`; layout();
+          } else if (!perf.noBloom && red && FX.bloom !== "off") {
+            perf.noBloom = true; bloomSetup(); $("sharpNote").textContent = "(the glow is paused to keep it smooth)";
+          } else if (perf.thin > 0.3) {
+            perf.thin *= 0.7; if (fx && fx.setStyle) fx.setStyle({ amount: FX.amount * perf.thin });
+            $("sharpNote").textContent = "(fewer particles to keep it smooth)";
+          }
         }
         perf.n = 0; perf.sum = 0;
       }
@@ -3422,9 +3445,9 @@
   $("fxLeft").oninput = () => custom("left", $("fxLeft").value);
   $("fxParticle").oninput = () => custom("particle", $("fxParticle").value);
   $("fxMotion").onchange = () => custom("motion", $("fxMotion").value);
-  $("fxAmount").oninput = () => custom("amount", +$("fxAmount").value);
+  $("fxAmount").oninput = () => { perf.thin = 1; custom("amount", +$("fxAmount").value); };
   $("fxSize").oninput = () => custom("size", +$("fxSize").value);
-  $("fxBloom").onchange = () => custom("bloom", $("fxBloom").value);
+  $("fxBloom").onchange = () => { perf.noBloom = false; custom("bloom", $("fxBloom").value); };
   $("fxRays").onchange = () => custom("rays", $("fxRays").checked);
   $("fxWisps").onchange = () => custom("wisps", $("fxWisps").checked);
   const setFxKey = (key, val) => { FX[key] = val; applyFx(); };                 // (not part of a preset)
